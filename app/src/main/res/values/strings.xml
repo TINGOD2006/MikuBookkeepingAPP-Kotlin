@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Miku 記帳</string>
+
+    <string name="notification_listener_label">Miku 記帳・自動記帳</string>
+    <string name="accessibility_service_label">Miku 記帳・無障礙自動記錄</string>
+    <string name="auto_record_ball_count">已記帳\n%1$d 筆</string>
+    <string name="auto_record_ball_description">已自動記帳 %1$d 筆，點擊確認分類，可拖動位置</string>
+    <string name="accessibility_service_description">讀取指定支付 App（微信、支付寶、AlipayHK、MPay 等）的付款／轉帳結果文字，完成交易後自動記帳，並在支付介面顯示可拖動的記帳浮球。不讀取其他 App。記錄與診斷保存在本機；若另外啟用並設定 AI 分類，交易文字會送往你設定的 AI 服務。</string>
+
+    <!-- 通知頻道 -->
+    <string name="channel_records_name">記帳通知</string>
+    <string name="channel_records_desc">新增收支或轉帳紀錄時顯示通知</string>
+    <string name="channel_budget_name">預算提醒</string>
+    <string name="channel_budget_desc">當月支出接近或超過預算時顯示提醒通知</string>
+    <string name="channel_foreground_name">背景監聽</string>
+    <string name="channel_foreground_desc">App 正在背景監聽支付通知</string>
+</resources>

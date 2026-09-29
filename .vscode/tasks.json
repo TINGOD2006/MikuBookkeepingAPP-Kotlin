@@ -1,0 +1,56 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Android: 查看已連接裝置",
+      "detail": "確認 adb 看得到實機或模擬器（狀態必須是 device）",
+      "type": "shell",
+      "command": "${env:LOCALAPPDATA}\\Android\\Sdk\\platform-tools\\adb.exe",
+      "args": ["devices", "-l"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Android: 建置 Debug APK",
+      "detail": "只編譯，產物在 app/build/outputs/apk/debug/app-debug.apk",
+      "type": "shell",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": ["assembleDebug", "--console=plain"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Android: 安裝到裝置 (installDebug)",
+      "detail": "編譯並安裝到目前已連接的裝置",
+      "type": "shell",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": ["installDebug", "--console=plain"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Android: 建置 + 安裝 + 啟動",
+      "detail": "最常用：一次完成編譯、安裝並開啟 App",
+      "type": "shell",
+      "command": "${env:LOCALAPPDATA}\\Android\\Sdk\\platform-tools\\adb.exe",
+      "args": ["shell", "am", "start", "-n", "com.example.countapp/.MainActivity"],
+      "dependsOn": ["Android: 安裝到裝置 (installDebug)"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "Android: 執行單元測試",
+      "detail": "58 個 JVM 單元測試（金額格式化、廣告過濾、資料移轉解碼…）",
+      "type": "shell",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": ["testDebugUnitTest", "--console=plain"],
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Android: 清除建置產物 (clean)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": ["clean", "--console=plain"],
+      "problemMatcher": []
+    }
+  ]
+}

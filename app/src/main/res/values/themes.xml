@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      整個 App 都是 Jetpack Compose 繪製，這裡只負責視窗層級的外觀：
+      深色背景可避免啟動時白屏閃爍（Flutter 版也是黑底）。
+    -->
+    <style name="Theme.MikuBookkeeping" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/miku_background</item>
+        <item name="android:statusBarColor">@color/miku_primary</item>
+        <item name="android:navigationBarColor">@color/miku_background</item>
+    </style>
+</resources>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  無障礙自動記帳設定。
+
+  服務會讀取白名單支付 App 的付款結果畫面，判定為「已完成交易」時自動記一筆；
+  同一份文字也會寫進讀屏診斷紀錄（「我的」頁 → 無障礙自動記錄）。
+  詳見 PaymentAccessibilityService.kt。
+
+  android:packageNames 是硬性過濾：服務「只會」收到這些 App 的視窗事件，
+  其他 App 的畫面完全不會被讀取（兼顧隱私與耗電）。
+  要加測其他 App，把包名以半形逗號附加在後即可（同時要更新
+  PaymentAccessibilityService.PROBE_PACKAGES）。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="300"
+    android:packageNames="com.tencent.mm,com.eg.android.AlipayGphone,hk.alipay.wallet,com.alipay.android.app,com.macaupass.rechargeEasy"
+    android:summary="@string/accessibility_service_label" />

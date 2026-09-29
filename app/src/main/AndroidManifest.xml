@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 必要權限 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- 前台服務（讓通知監聽服務在 App 被滑掉後仍能存活） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- ============================================================
+         返回手勢（edge swipe／預測返回）：
+         targetSdk 36 時，Android 16 已不再呼叫 onBackPressed()、也不再派送
+         KEYCODE_BACK，返回一律走 OnBackInvokedDispatcher 這條路；API 33~35
+         的平台則要看 manifest 這個旗標，未宣告時會印出
+         "OnBackInvokedCallback is not enabled for the application" 警告，
+         並直接忽略 App 註冊的 callback，改走舊的 KEYCODE_BACK/onBackPressed 路徑。
+         這裡明確開啟，讓 Compose 的 BackHandler（androidx.activity 的
+         OnBackPressedDispatcher）在所有 API 33+ 裝置都走同一條、可預期的路徑，
+         不必依賴各平台版本對「未宣告」的不同預設值。
+         影響：API 33+ 起返回不再經過 onBackPressed()／KEYCODE_BACK；
+         本 App 沒有覆寫 onBackPressed，對話框（Compose Dialog／ComponentDialog）
+         也各自在自己的視窗註冊 callback，關閉順序不變。
+         ============================================================ -->
+    <application
+        android:name=".MikuApplication"
+        android:allowBackup="true"
+        android:enableOnBackInvokedCallback="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MikuBookkeeping">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.MikuBookkeeping"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ============================================================
+             通知監聽服務：自動記帳的主要來源。
+             ⚠️ 這個服務是「主要的」記帳來源（取代 Flutter 版由 Dart 端寫入），
+                因此使用者必須在系統設定中授予「通知使用權限」。
+             ============================================================ -->
+        <service
+            android:name=".notification.PaymentNotificationListenerService"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true"
+            android:enabled="true"
+            android:directBootAware="true"
+            android:foregroundServiceType="dataSync"
+            android:label="@string/notification_listener_label">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- ============================================================
+             無障礙讀屏自動記帳
+             （讀取白名單支付 App 的「已完成」付款結果畫面並自動記一筆；
+               同時保留讀屏診斷紀錄供實機確認）
+             ============================================================ -->
+        <service
+            android:name=".notification.PaymentAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true"
+            android:enabled="true"
+            android:isAccessibilityTool="false"
+            android:label="@string/accessibility_service_label">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/payment_accessibility_service_config" />
+        </service>
+    </application>
+
+</manifest>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 與 Flutter 版 lib/constants/app_colors.dart 一致 -->
+    <color name="miku_primary">#FF007AF4</color>
+    <color name="miku_secondary">#FF05A9EF</color>
+    <color name="miku_background">#FF000000</color>
+    <color name="miku_text">#FFFFFFFF</color>
+    <color name="miku_text_secondary">#FFB4B4B4</color>
+    <color name="miku_card">#FFFFFFFF</color>
+</resources>
