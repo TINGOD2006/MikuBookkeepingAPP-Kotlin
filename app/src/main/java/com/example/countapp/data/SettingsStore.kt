@@ -2,6 +2,9 @@ package com.example.countapp.data
 
 import android.content.SharedPreferences
 import com.example.countapp.domain.ClassificationRules
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -37,35 +40,67 @@ class SettingsStore(
         get() = prefs.getBoolean(KEY_BUDGET_NOTIFICATION, true)
         set(value) = prefs.edit().putBoolean(KEY_BUDGET_NOTIFICATION, value).apply()
 
+    /**
+     * 自動記帳浮球（同時控制付款 App 上的系統浮球與 App 內右下角浮球）。
+     *
+     * 為什麼要有這個開關：浮球是「提醒使用者補分類」的入口，但蓋在別人的
+     * App 上，對不想被干擾的人來說就是一種打擾。關掉之後**記錄照樣會寫入**，
+     * 只是不再有任何浮球，需要時仍可從通知點進來確認。
+     *
+     * ⚠️ 用 StateFlow 而不是像其他設定一樣每次讀 prefs：
+     *    系統浮球由無障礙服務持有（見 PaymentAccessibilityService），
+     *    App 內浮球由 Compose 持有；兩者都要在「使用者當下切換開關」時
+     *    立刻收起已經顯示的浮球，所以需要一個可觀察的來源。
+     *    prefs 仍是最終儲存位置（關掉 App 再開、服務被重啟都要記得），
+     *    這裡的 StateFlow 只是「同一份設定的可觀察鏡像」，不可反向當成唯一來源。
+     */
+    private val _floatingBallEnabled = MutableStateFlow(prefs.getBoolean(KEY_FLOATING_BALL, true))
+
+    /** 浮球開關的可觀察版本（UI 與無障礙服務訂閱它）。 */
+    val floatingBallEnabledFlow: StateFlow<Boolean> = _floatingBallEnabled.asStateFlow()
+
+    /** 是否顯示自動記帳浮球（預設開啟）。 */
+    var floatingBallEnabled: Boolean
+        get() = _floatingBallEnabled.value
+        set(value) {
+            prefs.edit().putBoolean(KEY_FLOATING_BALL, value).apply()
+            _floatingBallEnabled.value = value
+        }
+
     // ========== 支付 APP 白名單 ==========
 
     /**
      * 允許讀取的支付 App 包名。
      *
-     * 未設定時回傳 [DEFAULT_ALLOWED_PACKAGES]（永遠回傳可修改的副本）。
+     * 未設定才使用預設；已儲存的空清單代表停用所有來源，不會恢復預設。
      */
-    var allowedPackages: List<String>
-        get() {
-            val raw = prefs.getString(KEY_ALLOWED_PACKAGES, null)
-            if (raw.isNullOrEmpty()) return DEFAULT_ALLOWED_PACKAGES.toList()
-
-            val parsed = try {
-                val array = JSONArray(raw)
-                buildList {
-                    for (i in 0 until array.length()) {
-                        val pkg = array.optString(i).trim()
-                        if (pkg.isNotEmpty()) add(pkg)
-                    }
+    private fun readAllowedPackages(): List<String> {
+        val raw = prefs.getString(KEY_ALLOWED_PACKAGES, null)
+        if (raw.isNullOrEmpty()) return DEFAULT_ALLOWED_PACKAGES.toList()
+        return try {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val pkg = array.optString(index).trim()
+                    if (pkg.isNotEmpty()) add(pkg)
                 }
-            } catch (e: Exception) {
-                emptyList()
-            }
-            return parsed.ifEmpty { DEFAULT_ALLOWED_PACKAGES.toList() }
+            }.distinct()
+        } catch (_: Exception) {
+            DEFAULT_ALLOWED_PACKAGES.toList()
         }
+    }
+
+    private val _allowedPackages = MutableStateFlow(readAllowedPackages())
+    val allowedPackagesFlow: StateFlow<List<String>> = _allowedPackages.asStateFlow()
+
+    var allowedPackages: List<String>
+        get() = _allowedPackages.value.toList()
         set(value) {
+            val packages = value.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             val array = JSONArray()
-            value.forEach { array.put(it) }
+            packages.forEach { array.put(it) }
             prefs.edit().putString(KEY_ALLOWED_PACKAGES, array.toString()).apply()
+            _allowedPackages.value = packages
         }
 
     /** 是否為允許的包名（系統與本 App 一律排除）。 */
@@ -75,10 +110,7 @@ class SettingsStore(
         if (packageName == "com.android.settings") return false
         if (packageName == ownPackage) return false
 
-        return allowedPackages.any { pkg ->
-            packageName.contains(pkg, ignoreCase = true) ||
-                pkg.contains(packageName, ignoreCase = true)
-        }
+        return packageName in allowedPackages
     }
 
     // ========== AI 設定 ==========
@@ -163,6 +195,7 @@ class SettingsStore(
         const val KEY_USE_AI: String = "use_ai_classification"
         const val KEY_BACKGROUND_NOTIFICATION: String = "background_notification_enabled"
         const val KEY_BUDGET_NOTIFICATION: String = "budget_notification_enabled"
+        const val KEY_FLOATING_BALL: String = "auto_record_floating_ball_enabled"
         const val KEY_ALLOWED_PACKAGES: String = "allowed_package_names"
         const val KEY_AI_API_URL: String = "ai_api_url"
         const val KEY_AI_API_KEY: String = "ai_api_key"
@@ -170,24 +203,11 @@ class SettingsStore(
         const val KEY_CUSTOM_RULES: String = "custom_rules"
         const val KEY_MIGRATION_DONE: String = "flutter_migration_completed"
 
-        /**
-         * 預設支援的支付 App 包名。
-         *
-         * ⚠️ 這裡是唯一的來源。Flutter 版因為分成 Dart 與 Kotlin 兩份，
-         *    曾經漏掉支付寶本體（只放了 SDK 套件 com.alipay.android.app），
-         *    導致支付寶預設完全記不到帳。原生版不會再有這個問題。
-         */
+        /** 唯一的預設來源；新增支援 App 不應自動擴大用戶的允許清單。 */
         val DEFAULT_ALLOWED_PACKAGES: List<String> = listOf(
             "com.tencent.mm",                 // 微信／微信支付
             "com.eg.android.AlipayGphone",    // 支付寶（中國本體）
-            "hk.alipay.wallet",               // AlipayHK
-            "com.alipay.android.app",         // 支付寶 SDK／安全支付（部分交易只有這裡會發通知）
             "com.macaupass.rechargeEasy",     // MPay / Macau Pass 澳門通
-            "com.google.android.apps.wallet", // Google Pay / Google Wallet
-            "com.apple.wallet",               // Apple Wallet
-            "com.octopus.nfc",                // 八達通
-            "hk.com.boc.bocmobilebanking",    // 中銀香港
-            "com.icbc.imobile",               // 工銀亞洲
         )
     }
 }

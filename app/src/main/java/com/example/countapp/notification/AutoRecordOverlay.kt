@@ -36,9 +36,15 @@ internal class AutoRecordOverlay(private val service: AccessibilityService) {
     private var ball: TextView? = null
     private var record: Record? = null
 
-    fun render(pending: List<Record>, appInForeground: Boolean) {
+    /**
+     * 依目前狀態顯示／收起浮球。
+     *
+     * @param enabled 「我的」頁的「自動記帳浮球」開關。false 時一律收起
+     *   （連 View 都不建立），但記錄已經寫入，使用者仍可從通知進來確認。
+     */
+    fun render(pending: List<Record>, appInForeground: Boolean, enabled: Boolean) {
         record = pending.firstOrNull()
-        if (record == null || appInForeground) { hide(); return }
+        if (record == null || appInForeground || !enabled) { hide(); return }
         val view = ball ?: createBall().also {
             // 系統撤銷服務權限時，通知與 App 內小球仍可操作。
             manager.addView(it, params)

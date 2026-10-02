@@ -1,6 +1,7 @@
 package com.example.countapp.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,14 +17,47 @@ import java.time.YearMonth
 class SettingsAndBudgetTest {
 
     @Test
-    fun `預設白名單包含微信與支付寶`() {
-        val defaults = SettingsStore.DEFAULT_ALLOWED_PACKAGES
+    fun `預設白名單只有微信支付寶與 MPay`() {
+        assertEquals(
+            setOf("com.tencent.mm", "com.eg.android.AlipayGphone", "com.macaupass.rechargeEasy"),
+            SettingsStore(FakeSharedPreferences()).allowedPackages.toSet(),
+        )
+    }
 
-        assertTrue("缺少微信", defaults.contains("com.tencent.mm"))
-        assertTrue("缺少支付寶本體", defaults.contains("com.eg.android.AlipayGphone"))
-        assertTrue("缺少 AlipayHK", defaults.contains("hk.alipay.wallet"))
-        assertTrue("缺少支付寶 SDK", defaults.contains("com.alipay.android.app"))
-        assertTrue("缺少 MPay", defaults.contains("com.macaupass.rechargeEasy"))
+    @Test
+    fun `取消全部應用後重新開啟仍為空清單`() {
+        val prefs = FakeSharedPreferences()
+        val settings = SettingsStore(prefs)
+        settings.allowedPackages = emptyList()
+        assertEquals(emptyList<String>(), settings.allowedPackagesFlow.value)
+        assertEquals(emptyList<String>(), SettingsStore(prefs).allowedPackages)
+    }
+
+    @Test
+    fun `包名精確比對且排除自身和系統介面`() {
+        val settings = SettingsStore(FakeSharedPreferences())
+        settings.allowedPackages = listOf("com.tencent.mm", "com.android.settings", "com.android.systemui", "com.example.countapp")
+        assertTrue(settings.isPackageAllowed("com.tencent.mm", "com.example.countapp"))
+        listOf("com.tencent", "com.tencent.mm.other", "COM.TENCENT.MM", "", "com.android.settings", "com.android.systemui", "com.example.countapp").forEach {
+            assertFalse(it, settings.isPackageAllowed(it, "com.example.countapp"))
+        }
+    }
+
+    @Test
+    fun `勾選內容去除空白重複並同步到觀察者及儲存`() {
+        val prefs = FakeSharedPreferences()
+        val settings = SettingsStore(prefs)
+        settings.allowedPackages = listOf(" com.example.pay ", "", "com.example.pay", "com.example.bank")
+        val expected = listOf("com.example.pay", "com.example.bank")
+        assertEquals(expected, settings.allowedPackagesFlow.value)
+        assertEquals(expected, SettingsStore(prefs).allowedPackages)
+    }
+
+    @Test
+    fun `損壞的白名單安全恢復預設`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(SettingsStore.KEY_ALLOWED_PACKAGES, "invalid json").apply()
+        assertEquals(SettingsStore.DEFAULT_ALLOWED_PACKAGES, SettingsStore(prefs).allowedPackages)
     }
 
     @Test

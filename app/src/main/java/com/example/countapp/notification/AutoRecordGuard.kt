@@ -1,6 +1,9 @@
 package com.example.countapp.notification
 
 import android.content.SharedPreferences
+import com.example.countapp.domain.AutoRecordDecision
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
 
 /**
@@ -19,6 +22,10 @@ import java.util.Locale
  *   2. [isScreenRecorded]／[rememberScreen]：**同一個畫面文字**的重記保護
  *      （寫進 SharedPreferences，所以服務被系統重啟也有效）。使用者回頭重看
  *      同一張交易結果頁時不會再記一筆。
+ *   3. [screenRecordId]：讀屏來源的記錄 id 本身**不含時間**（有交易單號就永久
+ *      去重，沒有則以「指紋 + 金額 + 交易日期」為鍵）。前兩層都是時間窗，
+ *      窗過了就擋不住；這一層是持久化的身分比對，是「同一筆被讀很多次」
+ *      最主要的防線。
  */
 object AutoRecordGuard {
 
@@ -63,6 +70,40 @@ object AutoRecordGuard {
     /** 去重鍵（也給測試與診斷用）。 */
     fun claimKey(packageName: String, amount: Double, isIncome: Boolean): String =
         "$packageName|${if (isIncome) "+" else "-"}|${String.format(Locale.US, "%.2f", amount)}"
+
+    /**
+     * 讀屏來源的記錄 id：**同一筆交易不管被讀幾次，都必須得到同一個 id**。
+     *
+     * 舊版把「90 秒時間桶」放進 id（`now / WINDOW_MS`），所以同一張交易結果頁
+     * 只要在 90 秒之後被再讀到一次（事件風暴、或使用者稍後回頭重看），
+     * 就會用新的 id 再寫一筆——這正是「一次記錄被讀了很多次 → 明細出現重複」
+     * 的來源。而 `RecordRepository.add()` 是以 id 判斷重複、且記錄會持久化，
+     * 所以只要 id 穩定，重複就從根本被擋掉（服務被系統重啟也一樣有效）。
+     *
+     * 兩種身分，依可靠度排序：
+     *   1. **有交易單號**（微信／支付寶的結果頁都有）：用單號當 id，
+     *      不加任何時間成分 → 同一筆交易永遠只會有一筆記錄。
+     *   2. **沒有單號**：用「畫面文字指紋 + 金額 + 交易日期（當地時區的 epochDay）」。
+     *      同一天內同一段文字只記一次；跨日後才可能再記（金額與商店都相同、
+     *      又同一天、又連畫面文字都一樣的兩筆交易，本來就無法區分）。
+     *      ⚠️ 日期用的是**交易日期**（見 TransactionTimeParser），不是「讀到的當下」，
+     *         所以同一筆交易就算跨過午夜才被重讀，仍然落在同一個桶子裡。
+     *
+     * @param dateMillis 這筆記錄最後採用的日期（交易時間，取不到時才是當下時間）
+     */
+    fun screenRecordId(
+        packageName: String,
+        decision: AutoRecordDecision,
+        dateMillis: Long,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): String {
+        val transactionId = decision.transactionId
+        if (transactionId != null) return "a11y_$packageName|tx|$transactionId"
+
+        val amount = String.format(Locale.US, "%.2f", decision.amount)
+        val epochDay = Instant.ofEpochMilli(dateMillis).atZone(zone).toLocalDate().toEpochDay()
+        return "a11y_$packageName|${decision.fingerprint}|$amount|$epochDay"
+    }
 
     /**
      * 這個畫面文字是不是已經記過了？

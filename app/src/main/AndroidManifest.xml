@@ -1,29 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- 必要權限 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 側載版供用戶選擇所有已安裝 App，無法以固定 queries 列舉未知來源。
+         若發佈至 Google Play，須另審核此權限用途；只針对此必要權限抑制提示。 -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <!-- 前台服務（讓通知監聽服務在 App 被滑掉後仍能存活） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- ============================================================
-         返回手勢（edge swipe／預測返回）：
-         targetSdk 36 時，Android 16 已不再呼叫 onBackPressed()、也不再派送
-         KEYCODE_BACK，返回一律走 OnBackInvokedDispatcher 這條路；API 33~35
-         的平台則要看 manifest 這個旗標，未宣告時會印出
-         "OnBackInvokedCallback is not enabled for the application" 警告，
-         並直接忽略 App 註冊的 callback，改走舊的 KEYCODE_BACK/onBackPressed 路徑。
-         這裡明確開啟，讓 Compose 的 BackHandler（androidx.activity 的
-         OnBackPressedDispatcher）在所有 API 33+ 裝置都走同一條、可預期的路徑，
-         不必依賴各平台版本對「未宣告」的不同預設值。
-         影響：API 33+ 起返回不再經過 onBackPressed()／KEYCODE_BACK；
-         本 App 沒有覆寫 onBackPressed，對話框（Compose Dialog／ComponentDialog）
-         也各自在自己的視窗註冊 callback，關閉順序不變。
-         ============================================================ -->
+    <!-- 啟用 API 33+ 原生返回分派；編輯器與子對話框各自處理返回。 -->
     <application
         android:name=".MikuApplication"
         android:allowBackup="true"

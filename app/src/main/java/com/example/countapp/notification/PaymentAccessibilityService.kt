@@ -14,45 +14,30 @@ import com.example.countapp.data.Record
 import com.example.countapp.domain.PaymentTextAnalyzer
 import com.example.countapp.domain.PaymentScreenAnalyzer
 import com.example.countapp.domain.ClassificationRules
+import com.example.countapp.domain.TransactionTimeParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import org.json.JSONArray
-import java.util.Locale
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /**
- * 無障礙讀屏自動記帳（微信／支付寶／AlipayHK／MPay）。
- *
- * 這支服務有兩個角色：
- *   1. **自動記帳**（主要）：讀取付款結果畫面的文字，判定成交易後直接寫入記錄，
- *      並在設定開啟時保留通知與預算提醒。
- *   2. **可行性探針**（輔助）：把每次讀到的節點樹文字與判定結果寫進
- *      [AccessibilityProbeLog]（「我的」頁可查看），方便在實機上確認
- *      「這個畫面到底讀不讀得到文字」。
- *
- * 設計參考（都是公開的 Android 自動記帳實作，做法一致：
- * 無障礙讀屏 / 通知監聽 → 解析付款結果文字 → 取出金額與商戶 → 寫入本機資料庫，
- * 並在付款當下跳出快速記帳對話框讓使用者補分類）：
- *   - Biller-Android：<https://github.com/kangkaipeng/Biller-Android>
- *   - daily-ledger（付款當下彈出快速記帳對話框）：<https://github.com/KlingNaA/daily-ledger>
- *   - AutoAccounting：<https://github.com/AutoAccountingOrg/AutoAccounting>
- *
- * ⚠️ 與上述專案不同的取捨：這裡**只信任「已完成」的畫面文字**。
- *    讀屏會在整個操作過程看到畫面，包含「輸入金額」「確認轉賬」等尚未完成的
- *    頁面，所以判定時額外要求成功／完成字樣（見
- *    [AutoRecordDecisionMaker.decide] 的 `requireCompletionSignal`）。
- *
- * 隱私：只會收到 res/xml/payment_accessibility_service_config.xml 裡
- *      `packageNames` 白名單 App 的視窗事件，其他 App 完全不會被讀取；
- *      讀到的文字只留在本機（記錄 + 探針 log）。
+ * 讀取用戶選取 App 的已完成交易畫面，保留本機診斷並在需要時顯示記帳浮球。
+ * 系統包名篩選隨設定即時更新，讀取節點及寫入前再各檢查一次白名單。
+ * 節點快照在主執行緒取得，解析與儲存放在背景執行。
  */
 class PaymentAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var overlay: AutoRecordOverlay? = null
+    private var connectionJob: Job? = null
 
     /** 節點樹走訪結果。 */
     private class NodeDump {
@@ -69,18 +54,34 @@ class PaymentAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        connectionJob?.cancel()
         overlay?.hide()
         overlay = AutoRecordOverlay(this)
         val container = applicationContext.appContainer
-        serviceScope.launch(Dispatchers.Main.immediate) {
-            combine(container.pendingAutoRecordPrompts, container.appInForeground) { pending, foreground ->
-                pending to foreground
-            }.collect { (pending, foreground) ->
-                runCatching { overlay?.render(pending, foreground) }
-                    .onFailure { Log.w(TAG, "無法顯示記帳浮球", it) }
+        connectionJob = serviceScope.launch(Dispatchers.Main.immediate) {
+            launch {
+                container.settingsStore.allowedPackagesFlow.collect { packages ->
+                    // 空陣列可能被系統視為「所有 App」，改用未安裝的佔位包名阻擋事件。
+                    val allowed = packages.filter { container.settingsStore.isPackageAllowed(it, packageName) }
+                    serviceInfo = serviceInfo.apply {
+                        packageNames = allowed.ifEmpty { listOf("$packageName.no_selected_apps") }.toTypedArray()
+                    }
+                    lastSignature = null
+                }
+            }
+            launch {
+                combine(
+                    container.pendingAutoRecordPrompts,
+                    container.appInForeground,
+                    container.settingsStore.floatingBallEnabledFlow,
+                ) { pending, foreground, ballEnabled -> Triple(pending, foreground, ballEnabled) }
+                    .collect { (pending, foreground, ballEnabled) ->
+                        runCatching { overlay?.render(pending, foreground, ballEnabled) }
+                            .onFailure { Log.w(TAG, "無法顯示記帳浮球", it) }
+                    }
             }
         }
-        Log.i(TAG, "✅ 無障礙自動記帳已連接（只讀取 ${PROBE_PACKAGES.size} 個支付 App）")
+        Log.i(TAG, "無障礙自動記帳已連接，按用戶選擇的 App 篩選")
     }
 
     override fun onInterrupt() {
@@ -99,7 +100,7 @@ class PaymentAccessibilityService : AccessibilityService() {
 
         val packageName = event.packageName?.toString() ?: return
         if (packageName == applicationContext.packageName) return
-        if (!isProbeTarget(packageName)) return
+        if (!applicationContext.appContainer.settingsStore.isPackageAllowed(packageName, applicationContext.packageName)) return
 
         val root = rootInActiveWindow ?: event.source ?: return
         if (root.packageName?.toString() != packageName) return
@@ -162,7 +163,18 @@ class PaymentAccessibilityService : AccessibilityService() {
             ?: return null
 
         val direction = if (decision.isIncome) "+" else "-"
-        val summary = "金額 $direction${decision.amount}（${decision.note}）"
+
+        // ===== 日期：優先採用畫面顯示的交易時間 =====
+        // 讀屏只在使用者操作支付 App 的當下看到畫面，因此舊版直接用「讀到的當下」；
+        // 但同一個畫面可能被重複讀到（事件風暴、或使用者回頭重看同一頁），
+        // 那樣第二筆就會帶著後面的日期進明細。畫面上的交易時間才是這筆消費真正的日期，
+        // 取不到（或解析結果不合理）才退回當下時間——絕不因為解析不出來就不記帳。
+        val now = System.currentTimeMillis()
+        val screenTime = TransactionTimeParser.parse(text, now)
+        val dateMillis = screenTime ?: now
+
+        val summary = "金額 $direction${decision.amount}（${decision.note}）" +
+            "・${formatTimeText(dateMillis)}"
 
         // 主開關 + 包名白名單（與通知來源相同的規則）
         if (!settings.autoRecordEnabled) return "符合條件但未記錄：自動記錄已關閉（$summary）"
@@ -170,7 +182,6 @@ class PaymentAccessibilityService : AccessibilityService() {
             return "符合條件但未記錄：$packageName 不在白名單（$summary）"
         }
 
-        val now = System.currentTimeMillis()
         val prefs = applicationContext.getSharedPreferences(AppContainer.PREFS_NAME, Context.MODE_PRIVATE)
 
         // 同一個畫面的事件風暴（內容變更可能連續送達數十次）先快速擋掉
@@ -190,16 +201,17 @@ class PaymentAccessibilityService : AccessibilityService() {
         }
 
         val category = ClassificationRules.classifyWith(text, settings.effectiveRules())
-        val bucket = now / AutoRecordGuard.WINDOW_MS
         val record = Record.create(
             amount = if (decision.isIncome) decision.amount else -decision.amount,
             category = category,
             note = decision.note,
-            dateMillis = now,
+            // 交易日期（見上方說明）；createdAt 才是「我們何時寫入」，
+            // 兩者刻意分開，重複讀到時才看得出是同一筆。
+            dateMillis = dateMillis,
             createdAtMillis = now,
-            // 同一個畫面 + 金額 + 時間窗只會產生同一個 id：重複事件會被儲存庫擋掉
-            id = "a11y_$packageName|${decision.fingerprint}|" +
-                "${String.format(Locale.US, "%.2f", decision.amount)}|$bucket",
+            // id 不含「讀到的當下」：同一筆交易不管被讀幾次都是同一個 id，
+            // 儲存庫的 id 去重就能永久擋掉重複（連服務重啟也有效）
+            id = AutoRecordGuard.screenRecordId(packageName, decision, dateMillis),
         )
 
         val added = container.recordRepository.add(record)
@@ -207,9 +219,9 @@ class PaymentAccessibilityService : AccessibilityService() {
         lastRecordedAt = now
         AutoRecordGuard.rememberScreen(prefs, packageName, decision.fingerprint, now)
 
-        if (!added) return "略過：記錄已存在（$summary）"
+        if (!added) return "略過：同一筆交易已記錄過（$summary）"
 
-        Log.i(TAG, "✅ 讀屏自動記帳：$category / ${decision.note} / ${decision.amount}")
+        Log.i(TAG, "✅ 讀屏自動記帳：$category / ${decision.note} / ${decision.amount} / $dateMillis")
 
         // 通知、分類確認頁、預算提醒（失敗不影響記帳）
         if (needsCategoryPrompt(packageName)) {
@@ -223,6 +235,17 @@ class PaymentAccessibilityService : AccessibilityService() {
 
         return "已自動記帳：$category $summary"
     }
+
+    /**
+     * 診斷紀錄用的日期時間文字。
+     *
+     * 為什麼要寫進診斷紀錄：使用者回報「同一筆被記了好幾次」時，光看金額分不出
+     * 是「同一筆重複」還是「兩筆真的同金額交易」，把採用的日期時間寫出來，
+     * 就能在「我的 → 無障礙自動記錄」直接核對。
+     */
+    private fun formatTimeText(millis: Long): String =
+        LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())
+            .format(SUMMARY_TIME_FORMAT)
 
     /** 這筆自動記錄是否需要跳出「選分類／寫備註」的確認頁。 */
     private fun needsCategoryPrompt(packageName: String): Boolean =
@@ -349,6 +372,10 @@ class PaymentAccessibilityService : AccessibilityService() {
         /** 同一個畫面文字的重記時間窗（比對跨來源去重更長，避免同一頁反覆記錄）。 */
         private const val REPEAT_WINDOW_MS = 600_000L
 
+        /** 診斷紀錄裡「這筆記錄採用的日期時間」格式。 */
+        private val SUMMARY_TIME_FORMAT: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm")
+
         /** 這些支付 App 自動記帳後會跳出「選分類／寫備註」確認頁。 */
         private val AUTO_PROMPT_PACKAGES = listOf(
             "com.tencent.mm",
@@ -357,26 +384,6 @@ class PaymentAccessibilityService : AccessibilityService() {
             "com.alipay.android.app",
             "com.macaupass.rechargeEasy", // MPay 澳門通
         )
-
-        /**
-         * 只讀這些 App 的畫面。
-         *
-         * ⚠️ 必須與 res/xml/payment_accessibility_service_config.xml 的
-         *    android:packageNames 保持一致；XML 是系統層的硬性過濾，
-         *    這裡是第二道確認。
-         */
-        val PROBE_PACKAGES: List<String> = listOf(
-            "com.tencent.mm",              // 微信
-            "com.eg.android.AlipayGphone", // 支付寶（中國）
-            "hk.alipay.wallet",            // AlipayHK
-            "com.alipay.android.app",      // 支付寶 SDK／安全支付
-            "com.macaupass.rechargeEasy",  // MPay 澳門通
-        )
-
-        fun isProbeTarget(packageName: String?): Boolean {
-            if (packageName.isNullOrEmpty()) return false
-            return PROBE_PACKAGES.any { it.equals(packageName, ignoreCase = true) }
-        }
 
         /** 讀取探針結果（最新在最後）。 */
         fun readLogs(context: Context): List<AccessibilityProbeLog> {

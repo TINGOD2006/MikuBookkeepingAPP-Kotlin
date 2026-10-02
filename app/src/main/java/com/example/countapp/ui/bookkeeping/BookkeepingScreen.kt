@@ -92,7 +92,7 @@ private val SwipeFlingThreshold: Dp = 320.dp
  * 明細頁（首頁）。
  *
  * 版面：上方 bar（標題 + 月份選擇器 + 收支統計）共用同一塊藍色底，中間沒有縫隙；
- * 下面是依日期分組的記錄清單。
+ * 下面是依日期分組的記錄清單，**日期由大到小、由上往下排**（30 號在最上面）。
  *
  * 操作：
  *   - **點一下**記錄 → 開編輯畫面
@@ -120,14 +120,21 @@ fun BookkeepingScreen(
     // 一次只允許一列停在開啟位置；開啟別列時原本那列會自動收回
     var openRecordId by remember { mutableStateOf<String?>(null) }
 
+    // 由上到下「新到舊」：日期大的（30 號）在最上面，同一天內也是晚的在前。
+    // 三個鍵都要是降冪，否則同一天內會被 createdAt 或 id 的升冪蓋回來。
     val monthRecords = remember(allRecords, selectedMonth) {
         allRecords.filter { YearMonth.from(it.localDate()) == selectedMonth }
-            .sortedWith(compareBy<Record> { it.dateMillis }.thenBy { it.createdAtMillis }.thenBy { it.id })
+            .sortedWith(
+                compareByDescending<Record> { it.dateMillis }
+                    .thenByDescending { it.createdAtMillis }
+                    .thenByDescending { it.id },
+            )
     }
 
-    // 由上到下按時間先後排列；同日記錄也保持由早到晚。
+    // 日期群組也必須跟著反向：groupBy 會保留 monthRecords 的順序，
+    // 但 toSortedMap 預設是升冪（1 號在最上），所以這裡要自己給比較器。
     val grouped = remember(monthRecords) {
-        monthRecords.groupBy { it.localDate() }.toSortedMap()
+        monthRecords.groupBy { it.localDate() }.toSortedMap(compareByDescending { it })
     }
 
     val expense = container.recordRepository.totalExpense(monthRecords)

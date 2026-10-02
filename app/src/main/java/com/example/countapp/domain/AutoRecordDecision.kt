@@ -8,6 +8,9 @@ package com.example.countapp.domain
  * @param merchant 交易對象（可能為空）
  * @param note 建議備註
  * @param fingerprint 去重用的指紋（同一段文字會得到同一個值）
+ * @param transactionId 畫面上的交易單號／訂單號（取不到時為 null）。
+ *   有單號時去重可以做到「同一筆交易永遠只記一次」，因此讀屏來源要盡量帶上它；
+ *   通知來源通常拿不到單號（保持 null 即可）。
  */
 data class AutoRecordDecision(
     val amount: Double,
@@ -15,6 +18,7 @@ data class AutoRecordDecision(
     val merchant: String,
     val note: String,
     val fingerprint: String,
+    val transactionId: String? = null,
 )
 
 /**

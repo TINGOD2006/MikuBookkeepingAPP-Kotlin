@@ -46,7 +46,10 @@ object PaymentScreenAnalyzer {
             if (status.contains("轉")) (if (income) "收到 $merchant 轉帳" else "轉帳給 $merchant") else merchant
         } else status
         return AutoRecordDecision(amount, income, merchant, note,
-            AutoRecordDecisionMaker.fingerprint(transactionId ?: "$status|$amount|$merchant"))
+            AutoRecordDecisionMaker.fingerprint(transactionId ?: "$status|$amount|$merchant"),
+            // 單號是「同一筆交易」最可靠的身分：帶上去讓記錄 id 可以完全與時間無關，
+            // 不論過多久再讀到同一頁都不會重複記（見 AutoRecordGuard.screenRecordId）
+            transactionId = transactionId)
     }
 
     private fun normalize(text: String): String {

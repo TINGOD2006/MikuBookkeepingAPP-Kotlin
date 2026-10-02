@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -56,7 +57,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.countapp.AppContainer
-import com.example.countapp.data.SettingsStore
 import com.example.countapp.domain.AmountFormatter
 import com.example.countapp.notification.PaymentAccessibilityService
 import com.example.countapp.notification.PaymentNotificationListenerService
@@ -66,6 +66,10 @@ import com.example.countapp.ui.SettingRow
 import com.example.countapp.ui.clickableNoRipple
 import com.example.countapp.ui.theme.MikuColors
 import com.example.countapp.ui.trash.TrashDialog
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /**
  * 我的（個人與設定）頁。
@@ -83,11 +87,14 @@ fun ProfileScreen(container: AppContainer) {
     // 設定不是 StateFlow，用版本號在使用者變更後重繪
     var version by remember { mutableStateOf(0) }
 
+    // 浮球開關：訂閱可觀察版本，切換時（含無障礙服務持有的系統浮球）立即生效
+    val ballEnabled by settings.floatingBallEnabledFlow.collectAsState()
+
     val totalExpense = remember(records) { container.recordRepository.totalExpense(records) }
     val totalIncome = remember(records) { container.recordRepository.totalIncome(records) }
 
     var showAiDialog by remember { mutableStateOf(false) }
-    var showWhitelistDialog by remember { mutableStateOf(false) }
+    var showAppsDialog by remember { mutableStateOf(false) }
     var showRulesDialog by remember { mutableStateOf(false) }
     var showProbeDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
@@ -166,6 +173,19 @@ fun ProfileScreen(container: AppContainer) {
                     )
                 }
 
+                // 浮球是自動記錄的提醒入口（付款 App 上的系統浮球 + App 內右下角浮球），
+                // 關掉只影響「提醒」，記錄照樣寫入，不會漏帳。
+                SettingRow(Icons.Filled.TouchApp, "自動記帳浮球") {
+                    Switch(
+                        checked = ballEnabled,
+                        onCheckedChange = {
+                            settings.floatingBallEnabled = it
+                            version++
+                        },
+                        colors = SwitchDefaults.colors(checkedTrackColor = MikuColors.Primary),
+                    )
+                }
+
                 SettingRow(Icons.Filled.Psychology, "AI 分類") {
                     Switch(
                         checked = settings.useAiClassification,
@@ -206,8 +226,8 @@ fun ProfileScreen(container: AppContainer) {
                     }
                 }
 
-                SettingRow(Icons.Filled.Security, "支付 APP 包名白名單") {
-                    TextButton(onClick = { showWhitelistDialog = true }) {
+                SettingRow(Icons.Filled.Security, "自動記錄應用") {
+                    TextButton(onClick = { showAppsDialog = true }) {
                         Text("管理", color = MikuColors.Primary, fontSize = 13.sp)
                     }
                 }
@@ -284,8 +304,8 @@ fun ProfileScreen(container: AppContainer) {
     if (showAiDialog) {
         AiSettingsDialog(container, onDismiss = { showAiDialog = false; version++ })
     }
-    if (showWhitelistDialog) {
-        WhitelistDialog(container, onDismiss = { showWhitelistDialog = false; version++ })
+    if (showAppsDialog) {
+        AutoRecordAppsDialog(container.settingsStore, onDismiss = { showAppsDialog = false; version++ })
     }
     if (showRulesDialog) {
         RulesDialog(container, onDismiss = { showRulesDialog = false; version++ })
@@ -432,113 +452,6 @@ private fun AiSettingsDialog(container: AppContainer, onDismiss: () -> Unit) {
         },
         onDismissRequest = onDismiss,
     )
-}
-
-// ============================================================
-// ✅ 包名白名單
-// ============================================================
-
-@Composable
-private fun WhitelistDialog(container: AppContainer, onDismiss: () -> Unit) {
-    val settings = container.settingsStore
-    var packages by remember { mutableStateOf(settings.allowedPackages) }
-    var newPackage by remember { mutableStateOf("") }
-    var showResetConfirm by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        containerColor = MikuColors.Surface,
-        title = { Text("支付 APP 包名白名單", color = MikuColors.Text, fontSize = 18.sp) },
-        text = {
-            Column {
-                Text(
-                    "僅會讀取並記錄以下包名的支付通知，其他 App 的通知一律過濾。" +
-                        "微信與支付寶已包含在預設值中。",
-                    color = MikuColors.TextSecondary,
-                    fontSize = 11.sp,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    DialogTextField(
-                        value = newPackage,
-                        onValueChange = { newPackage = it },
-                        label = "新增包名",
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(onClick = {
-                        val pkg = newPackage.trim()
-                        if (pkg.isNotEmpty() && !packages.contains(pkg)) {
-                            packages = packages + pkg
-                            newPackage = ""
-                        }
-                    }) { Text("新增", color = MikuColors.Primary) }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                Text("目前允許的包名：", color = MikuColors.Text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Column(modifier = Modifier.height(200.dp).verticalScroll(rememberScrollState())) {
-                    packages.forEach { pkg ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(pkg, color = MikuColors.Text, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                            // 觸控範圍放大（原本只有文字本身的大小）
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clickableNoRipple {
-                                        packages = packages - pkg
-                                    },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = "✕",
-                                    color = MikuColors.Expense,
-                                    fontSize = 16.sp,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                settings.allowedPackages = packages
-                onDismiss()
-            }) { Text("儲存", color = MikuColors.Primary) }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = { showResetConfirm = true }) {
-                    Text("恢復預設", color = MikuColors.Primary)
-                }
-                TextButton(onClick = onDismiss) {
-                    Text("取消", color = MikuColors.TextSecondary)
-                }
-            }
-        },
-        onDismissRequest = onDismiss,
-    )
-
-    if (showResetConfirm) {
-        ConfirmDialog(
-            title = "恢復預設白名單",
-            message = "將還原成內含微信、支付寶、MPay 的預設清單，你新增的包名會被移除。",
-            confirmText = "恢復",
-            onConfirm = {
-                packages = SettingsStore.DEFAULT_ALLOWED_PACKAGES
-                showResetConfirm = false
-            },
-            onDismiss = { showResetConfirm = false },
-        )
-    }
 }
 
 // ============================================================
@@ -809,6 +722,23 @@ private fun RuleWordChip(word: String, onDelete: () -> Unit, modifier: Modifier 
 // ✅ 無障礙自動記錄（含讀屏診斷紀錄）
 // ============================================================
 
+/**
+ * 診斷紀錄的讀取時間（裝置時區）。
+ *
+ * 為什麼要顯示到秒：判斷「一次付款被讀了好幾次」時，光看日期分不出是同一次
+ * 事件的風暴（同一秒內連續好幾個事件）還是使用者稍後回頭重看同一頁。
+ */
+private val ProbeLogTimeFormat: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
+
+private fun formatLogTime(millis: Long): String =
+    if (millis <= 0L) {
+        "時間不明"
+    } else {
+        LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())
+            .format(ProbeLogTimeFormat)
+    }
+
 @Composable
 private fun ProbeDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
@@ -833,9 +763,12 @@ private fun ProbeDialog(onDismiss: () -> Unit) {
                         "判定為「已完成交易」時自動記一筆（需要「自動記錄」開關也是開啟的）。\n" +
                         "同一筆消費若同時收到付款通知，兩個來源只會記一次；" +
                         "記完會直接在支付介面浮出可拖動圓球，點一下就能補分類與備註" +
-                        "（不理它也不會漏記）。\n" +
-                        "下面的紀錄是讀屏診斷：🟡 代表看到類似交易但沒有明確成功字樣，" +
-                        "因此不會被記錄。",
+                        "（不理它也不會漏記）。圓球可以在「我的」頁用「自動記帳浮球」開關關掉，" +
+                        "關掉後仍然會照常記錄。\n" +
+                        "記錄日期優先採用畫面顯示的交易時間（畫面沒寫才用讀到的當下時間），" +
+                        "因此同一筆交易重複讀到也只會落在同一天。\n" +
+                        "下面的紀錄是讀屏診斷：每筆都標了讀取時間，" +
+                        "🟡 代表看到類似交易但沒有明確成功字樣，因此不會被記錄。",
                     color = MikuColors.TextSecondary,
                     fontSize = 11.sp,
                 )
@@ -876,6 +809,12 @@ private fun ProbeDialog(onDismiss: () -> Unit) {
                                     .padding(8.dp),
                             ) {
                                 Text(log.packageName, color = MikuColors.Text, fontSize = 11.sp)
+                                // 讀取時間：用來核對「同一筆到底被讀了幾次、每次落在哪一天」
+                                Text(
+                                    text = formatLogTime(log.timeMillis),
+                                    color = MikuColors.TextSecondary,
+                                    fontSize = 10.sp,
+                                )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     log.verdict,

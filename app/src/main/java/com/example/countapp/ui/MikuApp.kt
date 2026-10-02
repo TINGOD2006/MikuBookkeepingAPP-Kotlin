@@ -113,6 +113,11 @@ fun MikuApp(container: AppContainer) {
         // 自動記錄（MPay 等）完成後，等待使用者確認分類／備註的記錄（可能有多筆排隊）
         val pendingAutoRecords by container.pendingAutoRecordPrompts.collectAsState()
 
+        // 「我的」頁的浮球開關：關掉後 App 內與付款 App 上的浮球都不再出現
+        // （記錄仍然照常寫入，只是不再有提醒入口）。訂閱 StateFlow 才會在
+        // 使用者切換開關的當下就收起已經顯示的圓球。
+        val floatingBallEnabled by container.settingsStore.floatingBallEnabledFlow.collectAsState()
+
         // 圓球浮出後，使用者「按了圓球」才會打開編輯頁；沒按就只是安靜地待著，
         // 記錄本身已經寫入，不會因為使用者不理它而遺失。
         var showAutoRecordEditor by remember { mutableStateOf(false) }
@@ -199,7 +204,7 @@ fun MikuApp(container: AppContainer) {
                 // 自動記錄（MPay 等）完成後的圓球：浮在整個 App 的最上層，
                 // 點一下＝開啟這筆記錄的編輯頁；不理它記錄也已經存好了。
                 // 使用者正在編輯那筆時（showAutoRecordEditor）先收起來，避免重複入口。
-                if (!showAutoRecordEditor && pendingAutoRecords.isNotEmpty()) {
+                if (floatingBallEnabled && !showAutoRecordEditor && pendingAutoRecords.isNotEmpty()) {
                     AutoRecordBall(
                         pendingCount = pendingAutoRecords.size,
                         onClick = { showAutoRecordEditor = true },
@@ -225,27 +230,14 @@ fun MikuApp(container: AppContainer) {
             )
         }
 
-        if (showAddRecord) {
-            RecordEditorScreen(
-                container = container,
-                onDismiss = { showAddRecord = false },
-            )
-        }
-
-        // 編輯既有記錄（與新增共用同一個編輯器）
-        editingRecord?.let { record ->
-            RecordEditorScreen(
-                container = container,
-                editing = record,
-                onDismiss = { editingRecord = null },
-            )
-        }
-
         // 自動記錄後的編輯頁（最上層）：使用者點了圓球（或點了通知）才會出現。
         // 直接關閉＝保留自動分類，因此不需要額外的「略過」按鈕。
         // 一次處理一筆，關閉後自動換佇列中的下一筆（圓球會帶著新的筆數重新浮出）。
-        if (showAutoRecordEditor) {
-            pendingAutoRecords.firstOrNull()?.let { record ->
+        // 一次只建立一個編輯視窗；返回後保留原本的搜尋或頁籤位置。
+        val autoRecord = pendingAutoRecords.firstOrNull().takeIf { showAutoRecordEditor }
+        when {
+            autoRecord != null -> {
+                val record = autoRecord
                 val remaining = pendingAutoRecords.size - 1
                 RecordEditorScreen(
                     container = container,
@@ -258,6 +250,15 @@ fun MikuApp(container: AppContainer) {
                     },
                 )
             }
+            editingRecord != null -> RecordEditorScreen(
+                container = container,
+                editing = editingRecord,
+                onDismiss = { editingRecord = null },
+            )
+            showAddRecord -> RecordEditorScreen(
+                container = container,
+                onDismiss = { showAddRecord = false },
+            )
         }
     }
 }
