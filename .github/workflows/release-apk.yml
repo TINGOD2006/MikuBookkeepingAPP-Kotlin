@@ -32,11 +32,16 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # ⚠️ 必須用 v4，不能用 v3：
+      #    v3 是 Node 20 時代的產物，runner 強制改用 Node 24 執行後會直接失敗
+      #    （2026-10-04 run #1 就是死在「Set up Android SDK」這一步），而且它依賴
+      #    已被 Google 移除的 `tools` 套件（issue #537）。v4.0.0 遷移 Node 24、
+      #    v4.0.2 修掉 tools 問題。這裡鎖定完整版號 v4.0.4，避免上游改動影響。
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.4
+
       # ⚠️ compileSdk 固定 36（見 app/build.gradle.kts），所以 platform 36 一定要有。
       #    runner 映像不保證已預裝，這裡明確安裝並先接受授權。
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install SDK components
         run: |
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
