@@ -59,8 +59,38 @@ class PaymentScreenAnalyzerTest {
         assertNotEquals(a.fingerprint, c.fingerprint)
     }
 
-    @Test fun `其他支付App仍走原有嚴格判斷`() {
-        assertNotNull(PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "支付成功 MOP 50"))
+    @Test fun `MPay轉帳輸入頁的成功提示與錢包餘額不可記帳`() {
+        assertNull(PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "轉賬\nMOP\n50.00\n錢包餘額\nMOP 1,234.00\n-可轉賬金額\nMOP 1,234.00\n-不可轉賬金額\nMOP 0\n. 請仔細檢查您輸入的轉賬收款方電話號碼, 確認其為最新及有效，成功轉賬後無法撤回。"))
+    }
+
+    @Test fun `MPay必須有獨立完成節點而非同一句提示`() {
+        assertNull(PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "支付成功 MOP 50"))
+    }
+
+    @Test fun `MPay付款詳情取交易金額而非餘額且保留單號`() {
+        val result = PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "交易詳情\n交易成功\n測試商戶\nMOP\n74.26\n付款方式\n錢包餘額\n付款時間\n2026-10-04 04:30\n交易編號\n2026100400000001")!!
+        assertEquals(74.26, result.amount, 0.001)
+        assertFalse(result.isIncome)
+        assertEquals("2026100400000001", result.transactionId)
+    }
+
+    @Test fun `MPay轉帳方向不明或列出多筆交易不記`() {
+        assertNull(PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "成功交易\nMOP 50\n轉賬"))
+        assertNull(PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "交易記錄\n交易成功\nMOP 50\n付款方式\n交易成功\nMOP 40"))
+    }
+
+    @Test fun `MPay獨立收款完成節點是收入`() {
+        val result = PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "收款成功\n收款金額\nMOP 50\n交易編號\n2026100400000002")!!
+        assertTrue(result.isIncome)
+        assertEquals(50.0, result.amount, 0.001)
+    }
+
+    @Test fun `MPay雙完成節點不依賴遍歷次序`() {
+        listOf("支付成功\n成功交易", "成功交易\n支付成功").forEach { statuses ->
+            val result = PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "$statuses\nMOP 50")
+            assertNotNull(result)
+            assertFalse(result!!.isIncome)
+        }
     }
 
     @Test fun `共用通知金額不截斷四位數`() {

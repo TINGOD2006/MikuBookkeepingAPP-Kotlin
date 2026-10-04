@@ -16,6 +16,7 @@ object PaymentScreenAnalyzer {
     private val idLabel = Regex("^(?:交易單號|轉賬單號|訂單號|商戶單號)[：:]?\\s*(.*)$")
 
     fun decide(packageName: String, text: String): AutoRecordDecision? {
+        if (packageName == "com.macaupass.rechargeEasy") return MpayScreenAnalyzer.decide(normalize(text))
         if (packageName !in packages) return AutoRecordDecisionMaker.decide(text, requireCompletionSignal = true)
         val normalized = normalize(text)
         val lines = normalized.split('\n', '｜').map { it.trim() }.filter { it.isNotEmpty() }

@@ -118,6 +118,28 @@ class BudgetRepository(
      * 內容不是 JSON 或型別不對（例如被別的版本寫成非字串）時都當成「尚未設定」：
      * 分類預算是附加功能，壞掉也不能讓預算頁或整月預算跟著失效。
      */
+    /** 已刪分類的歷史預算仍佔用名稱；改名前檢查所有月份，禁止隱式合併。 */
+    fun canRenameCategory(oldName: String, newName: String): Boolean {
+        if (oldName == newName) return true
+        val root = readCategoryBudgets()
+        return root.keys().asSequence().none { root.optJSONObject(it)?.has(newName) == true }
+    }
+
+    /** 分類名稱變更涵蓋所有月份，目標仍有歷史預算時不修改任何資料。 */
+    fun renameCategory(oldName: String, newName: String) {
+        if (oldName == newName) return
+        if (!canRenameCategory(oldName, newName)) return
+        val root = readCategoryBudgets()
+        root.keys().forEach { month ->
+            val values = root.optJSONObject(month) ?: return@forEach
+            if (values.has(oldName)) {
+                values.put(newName, values.get(oldName))
+                values.remove(oldName)
+            }
+        }
+        writeCategoryBudgets(root)
+    }
+
     private fun readCategoryBudgets(): JSONObject {
         val raw = try {
             prefs.getString(KEY_CATEGORY_BUDGETS, null)

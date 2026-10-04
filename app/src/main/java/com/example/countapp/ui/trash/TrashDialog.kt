@@ -61,7 +61,8 @@ fun TrashDialog(
     onDismiss: () -> Unit,
 ) {
     val trashed by container.recordRepository.trashedRecords.collectAsState()
-    val categoryStore = container.categoryStore
+    val categoryRevision by container.categoryStore.revision.collectAsState()
+    val categoryLookup = remember(categoryRevision) { container.categoryStore.recordCategoryLookup() }
 
     var pendingDelete by remember { mutableStateOf<Record?>(null) }
     var showEmptyConfirm by remember { mutableStateOf(false) }
@@ -113,7 +114,7 @@ fun TrashDialog(
                             TrashRow(
                                 record = record,
                                 remainingDays = record.trashRemainingDays(now),
-                                category = categoryStore.findAny(record.category),
+                                category = categoryLookup[record.isExpense to record.category],
                                 onRestore = { container.recordRepository.restore(record.id) },
                                 onDeleteForever = { pendingDelete = record },
                             )

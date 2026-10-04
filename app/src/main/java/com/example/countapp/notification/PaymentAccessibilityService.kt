@@ -22,6 +22,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import org.json.JSONArray
 import java.time.Instant
 import java.time.LocalDateTime
@@ -75,9 +78,14 @@ class PaymentAccessibilityService : AccessibilityService() {
                     container.appInForeground,
                     container.settingsStore.floatingBallEnabledFlow,
                 ) { pending, foreground, ballEnabled -> Triple(pending, foreground, ballEnabled) }
-                    .collect { (pending, foreground, ballEnabled) ->
-                        runCatching { overlay?.render(pending, foreground, ballEnabled) }
-                            .onFailure { Log.w(TAG, "無法顯示記帳浮球", it) }
+                    .collectLatest { (pending, foreground, ballEnabled) ->
+                        do {
+                            runCatching { overlay?.render(pending, foreground, ballEnabled) }
+                                .onFailure { Log.w(TAG, "無法顯示記帳浮球：${it.javaClass.simpleName}") }
+                            // 中斷或系統暫時拒絕視窗後重試；只在背景有待處理提示時運作。
+                            if (pending.isEmpty() || foreground || !ballEnabled) break
+                            delay(2000)
+                        } while (isActive)
                     }
             }
         }
@@ -129,13 +137,14 @@ class PaymentAccessibilityService : AccessibilityService() {
                 // 同一個畫面的事件可能連續好幾個同時進來，寫入端要序列化。
                 val outcome = synchronized(recordLock) { tryAutoRecord(packageName, joined) }
 
-                if (isNewScreen) {
+                // 重記保護照常執行，診斷列表只顯示新的判斷，不以重複略過訊息洗版。
+                if (isNewScreen && outcome?.startsWith("略過：") != true) {
                     val entry = buildEntry(eventClass, eventType, packageName, dump, joined, outcome)
                     appendLog(entry)
 
                     Log.i(TAG, "📥 ${entry.verdict}")
                     Log.i(TAG, "   pkg=$packageName nodes=${dump.nodeCount} texts=${dump.texts.size}")
-                    Log.i(TAG, "   text=$joined")
+                    // 不在 Logcat 輸出付款全文；完整診斷僅存於 App 本機的私有資料。
                 }
             } catch (e: Exception) {
                 // 單一事件處理失敗不可讓服務掛掉
@@ -302,7 +311,7 @@ class PaymentAccessibilityService : AccessibilityService() {
             advertisement -> "📢 讀到 $textCount 段文字，但判定為廣告推播（不會記錄）"
             outcome != null -> if (outcome.startsWith("已自動記帳")) "✅ $outcome" else "🟡 $outcome"
             paymentLike && amount != null ->
-                "🟡 看到類似交易（金額 $amount）但沒有明確成功字樣 → 尚未記錄"
+                "🟡 看到類似交易，但完成狀態、交易金額或收支方向未能確定 → 尚未記錄"
             paymentLike -> "🟡 讀到 $textCount 段文字，像交易但取不到金額"
             else -> "🟡 讀到 $textCount 段文字，但不符合已知交易格式（不會記錄）"
         }

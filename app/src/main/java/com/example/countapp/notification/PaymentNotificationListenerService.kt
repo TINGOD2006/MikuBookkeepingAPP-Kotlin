@@ -4,6 +4,9 @@ import android.app.Notification
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.app.PendingIntent
+import com.example.countapp.MainActivity
+import kotlinx.coroutines.flow.combine
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -14,6 +17,8 @@ import com.example.countapp.domain.AutoRecordDecisionMaker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
 
@@ -33,18 +38,31 @@ import java.security.MessageDigest
  */
 class PaymentNotificationListenerService : NotificationListenerService() {
 
+    private val settingsScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var foregroundSettingsJob: Job? = null
+
     override fun onListenerConnected() {
         super.onListenerConnected()
         Log.i(TAG, "✅ 通知監聽服務已連接")
-        updateForegroundState()
+        foregroundSettingsJob?.cancel()
+        foregroundSettingsJob = settingsScope.launch {
+            val settings = applicationContext.appContainer.settingsStore
+            combine(settings.backgroundNotificationEnabledFlow, settings.autoRecordEnabledFlow) { _, _ -> Unit }.collect {
+                updateForegroundState()
+            }
+        }
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        foregroundSettingsJob?.cancel()
+        stopForegroundCompat()
         Log.w(TAG, "⚠️ 通知監聽服務已斷開")
+        if (isNotificationAccessGranted(this)) requestRebindService(this)
     }
 
     override fun onDestroy() {
+        settingsScope.cancel()
         stopForegroundCompat()
         super.onDestroy()
     }
@@ -215,10 +233,16 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             val notification = androidx.core.app.NotificationCompat
                 .Builder(this, RecordNotifier.CHANNEL_FOREGROUND)
                 .setContentTitle("📊 Miku 記帳")
-                .setContentText("正在監聽支付通知，自動記錄中…")
+                .setContentText(if (applicationContext.appContainer.settingsStore.autoRecordEnabled)
+                    "正在監聽支付通知，自動記錄中…" else "通知監聽已連接，自動記錄已暫停")
                 .setSmallIcon(android.R.drawable.ic_menu_info_details)
                 .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
                 .setOngoing(true)
+                .setAutoCancel(false)
+                .setOnlyAlertOnce(true)
+                .setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE)
+                .setContentIntent(PendingIntent.getActivity(this, 1001,
+                    Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
                 .build()
             startForeground(FOREGROUND_NOTIFICATION_ID, notification)
         } catch (e: Exception) {
@@ -287,8 +311,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         /**
          * 要求系統重新綁定服務。
          *
-         * 使用者切換「後台常駐通知」時呼叫：服務若已在執行，重新綁定會再次
-         * 觸發 onListenerConnected()，前台通知狀態才會即時跟著改變。
+         * 用於啟動 App 或服務斷線後請求恢復；已連接時由設定 Flow 即時更新通知。
          */
         fun requestRebindService(context: Context) {
             try {

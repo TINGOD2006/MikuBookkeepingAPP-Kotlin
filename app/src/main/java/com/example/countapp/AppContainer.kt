@@ -6,6 +6,7 @@ import com.example.countapp.data.CategoryStore
 import com.example.countapp.data.FlutterPreferencesMigrator
 import com.example.countapp.data.Record
 import com.example.countapp.data.RecordRepository
+import com.example.countapp.data.PendingPromptQueue
 import com.example.countapp.data.SettingsStore
 import com.example.countapp.notification.AiClassifier
 import com.example.countapp.notification.RecordNotifier
@@ -15,7 +16,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -41,6 +41,7 @@ class AppContainer(context: Context) {
     val recordRepository: RecordRepository = RecordRepository(prefs)
     val budgetRepository: BudgetRepository = BudgetRepository(prefs)
     val categoryStore: CategoryStore = CategoryStore(prefs)
+    val categoryManager = com.example.countapp.data.CategoryManager(categoryStore, recordRepository, budgetRepository, settingsStore)
     val notifier: RecordNotifier = RecordNotifier(appContext)
 
     /** 通知文字分類器（AI 失敗時自動退回規則表）。 */
@@ -71,7 +72,10 @@ class AppContainer(context: Context) {
      * ⚠️ 用佇列而不是單一值：MPay 常常「通知」與「讀屏」幾乎同時各記一筆，
      *    單一值會被後來的覆蓋，導致其中一筆永遠等不到使用者確認。
      */
-    private val _pendingAutoRecordPrompts = MutableStateFlow<List<Record>>(emptyList())
+    private val promptLock = Any()
+    private val _pendingAutoRecordPrompts = MutableStateFlow(settingsStore.pendingPromptIds.mapNotNull { id ->
+        recordRepository.snapshot().firstOrNull { it.id == id }
+    })
 
     val pendingAutoRecordPrompts: StateFlow<List<Record>> = _pendingAutoRecordPrompts.asStateFlow()
 
@@ -98,9 +102,7 @@ class AppContainer(context: Context) {
      * @param openEditor 通知被點擊時傳 true → UI 直接開啟編輯頁，不必再點一次圓球。
      */
     fun requestAutoRecordPrompt(record: Record, openEditor: Boolean = false) {
-        // 用 update（CAS 重試）而不是先讀再寫：通知服務與讀屏服務幾乎同時
-        // 各自呼叫時，先讀再寫會少排一筆確認頁。
-        _pendingAutoRecordPrompts.update { pending ->
+        updatePrompts { pending ->
             val others = pending.filterNot { it.id == record.id }
             if (openEditor) (listOf(record) + others).take(MAX_PENDING_PROMPTS)
             else (others + record).takeLast(MAX_PENDING_PROMPTS)
@@ -114,11 +116,32 @@ class AppContainer(context: Context) {
     }
 
     /** 使用者已處理（或略過）佇列中的第一筆，換下一筆。 */
-    fun clearAutoRecordPrompt() {
-        _pendingAutoRecordPrompts.update { it.drop(1) }
+    fun clearAutoRecordPrompt(recordId: String) {
+        updatePrompts { PendingPromptQueue.dismiss(it, recordId) }
+    }
+
+    /** 佇列修改與保存共用鎖，通知、讀屏與 UI 同時操作也不會倒寫舊 id。 */
+    private fun updatePrompts(change: (List<Record>) -> List<Record>) = synchronized(promptLock) {
+        val pending = change(_pendingAutoRecordPrompts.value)
+        val ids = pending.map { it.id }
+        if (settingsStore.pendingPromptIds != ids) settingsStore.pendingPromptIds = ids
+        _pendingAutoRecordPrompts.value = pending
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        // 使用者修改或刪除帳目時，提示同步採用最新記錄，避免點進已刪除的帳目。
+        scope.launch {
+            recordRepository.records.collect {
+                updatePrompts { pending ->
+                    // Flow 的舊通知可能晚於新提示抵達，鎖內取最新快照才不會誤刪新提示。
+                    val records = recordRepository.snapshot()
+                    pending.mapNotNull { old -> records.firstOrNull { it.id == old.id } }
+                }
+            }
+        }
+    }
 
     /** 先本機記帳並顯示浮球，AI 分類在背景補上，不延遲付款提示。 */
     fun refineAutoRecordCategory(record: Record, text: String) {
@@ -127,11 +150,7 @@ class AppContainer(context: Context) {
             val category = aiClassifier.classify(text, settingsStore)
             if (category == record.category) return@launch
             val refined = record.copy(category = category)
-            if (recordRepository.updateIfUnchanged(record, refined)) {
-                _pendingAutoRecordPrompts.update { pending ->
-                    pending.map { if (it == record) refined else it }
-                }
-            }
+            recordRepository.updateIfUnchanged(record, refined)
         }
     }
 

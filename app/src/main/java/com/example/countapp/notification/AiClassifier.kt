@@ -42,7 +42,7 @@ class AiClassifier {
     }
 
     private fun classifyRemote(text: String, settings: SettingsStore): String? {
-        val categories = ClassificationRules.defaultRules.keys.joinToString("、")
+        val categories = settings.effectiveRules().keys.joinToString("、")
 
         val body = JSONObject().apply {
             put("model", settings.aiModel)
@@ -109,7 +109,7 @@ class AiClassifier {
 
         // 只接受「已知分類」或使用者自訂的分類，避免模型亂回一個新分類
         val known = settings.effectiveRules().keys
-        return known.firstOrNull { content == it || content.contains(it) }
+        return ClassificationRules.resolveAiCategory(content, known)
     }
 
     companion object {

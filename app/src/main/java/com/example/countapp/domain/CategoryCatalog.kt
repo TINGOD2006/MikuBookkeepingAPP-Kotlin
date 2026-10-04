@@ -27,7 +27,7 @@ object CategoryCatalog {
 
     val TYPES: List<String> = listOf(TYPE_EXPENSE, TYPE_INCOME)
 
-    /** 預設支出分類（順序與 Flutter 版相同）。 */
+    /** 常用支出在前，保留歷史名稱以免影響既有帳目及預算。 */
     val defaultExpenseCategories: List<CategoryItem> = listOf(
         CategoryItem("學費", "school", 0xFF2196F3),
         CategoryItem("購物", "shopping_bag", 0xFF9C27B0),
@@ -57,7 +57,20 @@ object CategoryCatalog {
         CategoryItem("孩子", "child_care", 0xFF8BC34A),
         CategoryItem("蔬菜", "agriculture", 0xFF4CAF50),
         CategoryItem("轉帳", "swap_horiz", 0xFF2196F3),
-    )
+        CategoryItem("房租", "home", 0xFFFF9800),
+        CategoryItem("水電", "water_drop", 0xFF03A9F4),
+        CategoryItem("通訊", "phone_android", 0xFF009688),
+        CategoryItem("保險", "health_and_safety", 0xFF4CAF50),
+        CategoryItem("稅務", "receipt_long", 0xFF607D8B),
+        CategoryItem("訂閱", "music_note", 0xFFE91E63),
+        CategoryItem("手續費", "account_balance", 0xFF795548),
+        CategoryItem("日用品", "shopping_cart", 0xFF9C27B0),
+        CategoryItem("紅包", "card_giftcard", 0xFFF44336),
+        CategoryItem("其他", "more_horiz", 0xFF9E9E9E),
+    ).let { categories ->
+        val frequent = listOf("食物", "交通", "購物", "住房", "房租", "水電", "通訊", "日用品", "醫療", "教育", "保險", "訂閱")
+        categories.sortedBy { frequent.indexOf(it.name).takeIf { index -> index >= 0 } ?: frequent.size }
+    }
 
     /** 預設收入分類（順序與 Flutter 版相同）。 */
     val defaultIncomeCategories: List<CategoryItem> = listOf(

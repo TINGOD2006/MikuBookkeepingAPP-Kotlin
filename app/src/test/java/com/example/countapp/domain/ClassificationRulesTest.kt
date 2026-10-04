@@ -11,6 +11,41 @@ import org.junit.Test
 class ClassificationRulesTest {
 
     @Test
+    fun `AI 完整分類名稱不會被較短名稱搶先匹配`() {
+        val known = listOf("保險", "其他", "保險理賠", "其他收入")
+        assertEquals("保險理賠", ClassificationRules.resolveAiCategory("保險理賠", known))
+        assertEquals("其他收入", ClassificationRules.resolveAiCategory("其他收入", known))
+    }
+
+    @Test
+    fun `訂閱費不被商家名稱搶成購物`() {
+        assertEquals("訂閱", ClassificationRules.classify("Apple iCloud subscription MOP8"))
+    }
+
+    @Test
+    fun `手續費不被轉帳文字搶成轉帳`() {
+        assertEquals("手續費", ClassificationRules.classify("跨行轉帳手續費 MOP3"))
+    }
+
+    @Test
+    fun `日用品具有可用的內建分類詞條`() {
+        assertEquals("日用品", ClassificationRules.classify("洗衣液 MOP32"))
+    }
+
+    @Test
+    fun `明確清空內建分類不會自動恢復詞條`() {
+        val merged = ClassificationRules.mergeRules(mapOf("食物" to emptyList()))
+        assertEquals("其他", ClassificationRules.classifyWith("星巴克 MOP38", merged))
+    }
+
+    @Test
+    fun `常見固定支出分類必須能在新增頁選取`() {
+        listOf("房租", "水電", "通訊", "保險", "稅務", "訂閱", "手續費", "日用品", "其他").forEach { name ->
+            org.junit.Assert.assertNotNull("無法選取 $name", CategoryCatalog.defaultExpenseCategories.firstOrNull { it.name == name })
+        }
+    }
+
+    @Test
     fun `內建規則 麥當勞 歸入食物`() {
         assertEquals("食物", ClassificationRules.classify("麥當勞 MOP45"))
     }

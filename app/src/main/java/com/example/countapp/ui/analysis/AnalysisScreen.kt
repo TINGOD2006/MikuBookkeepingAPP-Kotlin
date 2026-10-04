@@ -71,6 +71,7 @@ private data class CategoryStat(
 @Composable
 fun AnalysisScreen(container: AppContainer) {
     val records by container.recordRepository.records.collectAsState()
+    val categoryRevision by container.categoryStore.revision.collectAsState()
     var selectedType by remember { mutableStateOf(CategoryCatalog.TYPE_EXPENSE) }
 
     val filtered = remember(records, selectedType) {
@@ -81,20 +82,9 @@ fun AnalysisScreen(container: AppContainer) {
         }
     }
 
-    // 分類查表（預設 + 使用者自訂）。
-    //
-    // CategoryStore.categoriesFor() 每次呼叫都會重新解析 SharedPreferences 裡的 JSON，
-    // 若在圖表／清單迴圈中逐筆呼叫會很浪費效能；這裡先用 remember 建立一次
-    // 「名稱 → 分類」的快取，迴圈內只做 Map 查表。
-    // 同名分類的優先順序與 CategoryStore.findAny() 一致：先支出、後收入。
-    val categoryLookup = remember(records) {
-        val lookup = linkedMapOf<String, CategoryItem>()
-        CategoryCatalog.TYPES.forEach { type ->
-            container.categoryStore.categoriesFor(type).forEach { item ->
-                if (!lookup.containsKey(item.name)) lookup[item.name] = item
-            }
-        }
-        lookup
+    // 包括已刪分類，依目前收支方向快取圖示；分類變更時一起刷新。
+    val categoryLookup = remember(selectedType, categoryRevision) {
+        container.categoryStore.displayCategories(selectedType).associateBy { it.name }
     }
 
     val stats = remember(filtered, categoryLookup) { buildStats(filtered, categoryLookup) }

@@ -16,7 +16,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -39,7 +39,7 @@ internal fun RecordCategoryGrid(
     selectedName: String?,
     modifier: Modifier,
     onSelect: (String) -> Unit,
-    onAddCategory: () -> Unit,
+    onCategorySettings: () -> Unit,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(4),
@@ -49,7 +49,7 @@ internal fun RecordCategoryGrid(
         items(categories, key = { "category:${it.name}" }) { category ->
             CategoryCell(category, category.name == selectedName, onClick = { onSelect(category.name) })
         }
-        item(key = "action:add_category") { AddCategoryCell(onClick = onAddCategory) }
+        item(key = "action:category_settings") { CategorySettingsCell(onClick = onCategorySettings) }
     }
 }
 
@@ -108,7 +108,7 @@ private fun CategoryCell(
 }
 
 @Composable
-private fun AddCategoryCell(
+private fun CategorySettingsCell(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -126,14 +126,14 @@ private fun AddCategoryCell(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Filled.Add,
-                contentDescription = "新增分類",
+                imageVector = Icons.Filled.Settings,
+                contentDescription = "類別設定",
                 tint = MikuColors.Text,
                 modifier = Modifier.size(24.dp),
             )
         }
         Spacer(modifier = Modifier.height(2.dp))
-        Text("新增", color = MikuColors.Text, fontSize = 10.sp)
+        Text("設定", color = MikuColors.Text, fontSize = 10.sp)
     }
 }
 

@@ -68,7 +68,8 @@ fun SearchScreen(
     onEditRecord: (Record) -> Unit,
 ) {
     val allRecords by container.recordRepository.records.collectAsState()
-    val categoryStore = container.categoryStore
+    val categoryRevision by container.categoryStore.revision.collectAsState()
+    val categoryLookup = remember(categoryRevision) { container.categoryStore.recordCategoryLookup() }
 
     var query by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
@@ -209,7 +210,7 @@ fun SearchScreen(
                 items(shown, key = { it.id }) { record ->
                     RecordCard(
                         record = record,
-                        category = categoryStore.findAny(record.category),
+                        category = categoryLookup[record.isExpense to record.category],
                         showDate = true,
                         onClick = { onEditRecord(record) },
                     )

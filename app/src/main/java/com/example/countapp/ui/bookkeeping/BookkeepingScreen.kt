@@ -110,7 +110,8 @@ fun BookkeepingScreen(
     onOpenSearch: () -> Unit,
 ) {
     val allRecords by container.recordRepository.records.collectAsState()
-    val categoryStore = container.categoryStore
+    val categoryRevision by container.categoryStore.revision.collectAsState()
+    val categoryLookup = remember(categoryRevision) { container.categoryStore.recordCategoryLookup() }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -197,7 +198,7 @@ fun BookkeepingScreen(
                         items(records, key = { it.id }) { record ->
                             SwipeActionRecord(
                                 record = record,
-                                category = categoryStore.findAny(record.category),
+                                category = categoryLookup[record.isExpense to record.category],
                                 revealed = openRecordId == record.id,
                                 onRevealChange = { revealed ->
                                     openRecordId = if (revealed) record.id else null

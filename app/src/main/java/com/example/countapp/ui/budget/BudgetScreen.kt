@@ -71,6 +71,7 @@ import java.time.YearMonth
 @Composable
 fun BudgetScreen(container: AppContainer) {
     val records by container.recordRepository.records.collectAsState()
+    val categoryRevision by container.categoryStore.revision.collectAsState()
 
     var selectedMonth by remember { mutableStateOf(YearMonth.now()) }
     var showMonthPicker by remember { mutableStateOf(false) }
@@ -94,7 +95,7 @@ fun BudgetScreen(container: AppContainer) {
         container.budgetRepository.load(selectedMonth)
     }
     // 各分類預算：只包含「有設定」的分類，缺值不會出現在這個 map
-    val categoryBudgets = remember(selectedMonth, version) {
+    val categoryBudgets = remember(selectedMonth, version, categoryRevision) {
         container.budgetRepository.loadCategoryBudgets(selectedMonth)
     }
     val monthRecords = remember(records, selectedMonth) {
@@ -110,8 +111,11 @@ fun BudgetScreen(container: AppContainer) {
             .mapValues { (_, list) -> list.sumOf { it.absoluteAmount } }
     }
     // 支出分類清單（含自訂分類）；即使一個分類預算都沒設定也能正常運作
-    val expenseCategories = remember(version) {
+    val expenseCategories = remember(version, categoryRevision) {
         container.categoryStore.categoriesFor(CategoryCatalog.TYPE_EXPENSE)
+    }
+    val categoryDisplay = remember(categoryRevision) {
+        container.categoryStore.displayCategories(CategoryCatalog.TYPE_EXPENSE).associateBy { it.name }
     }
 
     // 這張清單只放「已設定預算的」與「剛新增還沒填金額的」，其他分類完全不出現。
@@ -367,8 +371,8 @@ fun BudgetScreen(container: AppContainer) {
 
                 CategoryBudgetRow(
                     name = name,
-                    iconKey = expenseCategories.firstOrNull { it.name == name }?.iconKey,
-                    iconColorArgb = expenseCategories.firstOrNull { it.name == name }?.colorArgb,
+                    iconKey = categoryDisplay[name]?.iconKey,
+                    iconColorArgb = categoryDisplay[name]?.colorArgb,
                     status = status,
                     editing = editingCategory == name,
                     input = categoryInputText,

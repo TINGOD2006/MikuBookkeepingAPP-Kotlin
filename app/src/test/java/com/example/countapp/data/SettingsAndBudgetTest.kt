@@ -17,6 +17,51 @@ import java.time.YearMonth
 class SettingsAndBudgetTest {
 
     @Test
+    fun `待處理浮球提示在程序重啟後保留而已處理的不再出現`() {
+        val prefs = FakeSharedPreferences()
+        SettingsStore(prefs).pendingPromptIds = listOf("a", "b", "a")
+        assertEquals(listOf("a", "b"), SettingsStore(prefs).pendingPromptIds)
+        SettingsStore(prefs).pendingPromptIds = listOf("b")
+        assertEquals(listOf("b"), SettingsStore(prefs).pendingPromptIds)
+        SettingsStore(prefs).pendingPromptIds = emptyList()
+        assertEquals(emptyList<String>(), SettingsStore(prefs).pendingPromptIds)
+    }
+
+    @Test
+    fun `設定開關變更會通知 UI 並在重新開啟後保留`() {
+        val prefs = FakeSharedPreferences()
+        val settings = SettingsStore(prefs)
+        val flows = listOf(settings.autoRecordEnabledFlow, settings.useAiClassificationFlow,
+            settings.backgroundNotificationEnabledFlow, settings.budgetNotificationEnabledFlow)
+        val writes = listOf<() -> Unit>(
+            { settings.autoRecordEnabled = true },
+            { settings.useAiClassification = false },
+            { settings.backgroundNotificationEnabled = true },
+            { settings.budgetNotificationEnabled = false },
+        )
+        val expected = listOf(true, false, true, false)
+        writes.forEachIndexed { index, write ->
+            val flow = flows[index]
+            val before = flow.value
+            write()
+            assertEquals(expected[index], flow.value)
+            assertFalse(before == flow.value)
+        }
+        val reopened = SettingsStore(prefs)
+        assertEquals(expected, listOf(reopened.autoRecordEnabledFlow.value, reopened.useAiClassificationFlow.value,
+            reopened.backgroundNotificationEnabledFlow.value, reopened.budgetNotificationEnabledFlow.value))
+    }
+
+    @Test
+    fun `清空分類詞條後重新開啟仍停用該分類的內建詞條`() {
+        val prefs = FakeSharedPreferences()
+        SettingsStore(prefs).customRules = mapOf("食物" to emptyList())
+        val reopened = SettingsStore(prefs)
+        assertTrue(reopened.customRules.containsKey("食物"))
+        assertEquals("其他", com.example.countapp.domain.ClassificationRules.classifyWith("星巴克 MOP38", reopened.effectiveRules()))
+    }
+
+    @Test
     fun `預設白名單只有微信支付寶與 MPay`() {
         assertEquals(
             setOf("com.tencent.mm", "com.eg.android.AlipayGphone", "com.macaupass.rechargeEasy"),

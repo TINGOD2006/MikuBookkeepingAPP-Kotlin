@@ -60,6 +60,19 @@ class RecordRepository(
     /** 目前垃圾桶快照。 */
     fun trashSnapshot(): List<Record> = _trashedRecords.value
 
+    /** 包括垃圾桶，僅修改指定收支方向的分類；其餘記錄欄位全部沿用。 */
+    fun renameCategory(type: String, oldName: String, newName: String) = synchronized(lock) {
+        val current = readFromPrefs()
+        val expense = type == com.example.countapp.domain.CategoryCatalog.TYPE_EXPENSE
+        val updated = current.map {
+            if (it.category == oldName && it.isExpense == expense) it.copy(category = newName) else it
+        }
+        if (updated != current) {
+            writeToPrefs(updated)
+            publish(updated)
+        }
+    }
+
     /**
      * 新增一筆記錄。
      *
@@ -69,7 +82,7 @@ class RecordRepository(
         val current = readFromPrefs()
         if (current.any { it.id == record.id }) return false
 
-        val updated = current + record
+        val updated = current + normalizeCategory(record)
         writeToPrefs(updated)
         publish(updated)
         return true
@@ -90,7 +103,7 @@ class RecordRepository(
 
         val stored = current[index]
         val updated = current.toMutableList().also {
-            it[index] = record.copy(deletedAtMillis = stored.deletedAtMillis)
+            it[index] = normalizeCategory(record).copy(deletedAtMillis = stored.deletedAtMillis)
         }
         writeToPrefs(updated)
         publish(updated)
@@ -103,10 +116,16 @@ class RecordRepository(
         val current = readFromPrefs()
         val index = current.indexOfFirst { it.id == expected.id }
         if (index < 0 || current[index] != expected || current[index].isTrashed) return false
-        val updated = current.toMutableList().also { it[index] = replacement }
+        val updated = current.toMutableList().also { it[index] = normalizeCategory(replacement) }
         writeToPrefs(updated)
         publish(updated)
         true
+    }
+
+    private fun normalizeCategory(record: Record): Record {
+        val type = if (record.isExpense) com.example.countapp.domain.CategoryCatalog.TYPE_EXPENSE else com.example.countapp.domain.CategoryCatalog.TYPE_INCOME
+        val name = CategoryStore(prefs).resolveName(type, record.category)
+        return if (name == record.category) record else record.copy(category = name)
     }
 
     /** 依 id 永久刪除（不進垃圾桶）。垃圾桶對話框的「永久刪除」用。 */

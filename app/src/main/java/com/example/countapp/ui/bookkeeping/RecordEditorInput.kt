@@ -146,60 +146,62 @@ internal fun RecordEditorInput(
 
         // 編寫備註時由系統鍵盤接替數字鍵盤，避免兩個鍵盤擠掉分類區。
         if (showNumberPad) {
-            NumberPad(compactNumberPad) { key ->
+            NumberPad(compact = compactNumberPad, onSave = onSave, onKey = { key ->
                 focusManager.clearFocus()
                 onKey(key)
-            }
+            })
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        if (!showNumberPad || isEditing) {
+            Spacer(modifier = Modifier.height(6.dp))
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            // 編輯模式才提供刪除：會進垃圾桶，不是直接消失
-            if (isEditing) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(MinTouchTarget)
-                        .background(MikuColors.SurfaceVariant, RoundedCornerShape(6.dp))
-                        .clickableNoRipple(onDelete),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = null,
-                        tint = MikuColors.Expense,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("刪除", color = MikuColors.Expense, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Row(modifier = Modifier.fillMaxWidth()) {
+                // 編輯模式才提供刪除：會進垃圾桶，不是直接消失
+                if (isEditing) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(MinTouchTarget)
+                            .background(MikuColors.SurfaceVariant, RoundedCornerShape(6.dp))
+                            .clickableNoRipple(onDelete),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Delete,
+                            contentDescription = null,
+                            tint = MikuColors.Expense,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("刪除", color = MikuColors.Expense, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (!showNumberPad) Spacer(modifier = Modifier.width(8.dp))
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-            }
 
-            Box(
-                modifier = Modifier
-                    .weight(3f)
-                    .height(MinTouchTarget)
-                    .background(MikuColors.Primary, RoundedCornerShape(6.dp))
-                    .clickableNoRipple(onSave),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = if (isEditing) "儲存變更" else "保存記帳",
-                    color = MikuColors.Text,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                )
+                if (!showNumberPad) Box(
+                    modifier = Modifier
+                        .weight(3f)
+                        .height(MinTouchTarget)
+                        .background(MikuColors.Primary, RoundedCornerShape(6.dp))
+                        .clickableNoRipple(onSave),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (isEditing) "儲存變更" else "保存記帳",
+                        color = MikuColors.Text,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
 }
 
-/** 自製數字鍵盤：最後一列是加寬的 0，並提供小數點與清空。 */
+/** 最末列的 0 對齊三個數字欄，保存佔第四欄。 */
 @Composable
-private fun NumberPad(compact: Boolean, onKey: (String) -> Unit) {
+private fun NumberPad(compact: Boolean, onSave: () -> Unit, onKey: (String) -> Unit) {
     val rows = listOf(
         listOf("7", "8", "9", "⌫"),
         listOf("4", "5", "6", "清空"),
@@ -216,7 +218,14 @@ private fun NumberPad(compact: Boolean, onKey: (String) -> Unit) {
             Spacer(modifier = Modifier.height(4.dp))
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            KeyButton(key = "0", flex = 4, compact = compact, onKey = onKey)
+            KeyButton(key = "0", flex = 3, compact = compact, onKey = onKey)
+            Box(
+                Modifier.weight(1f).padding(horizontal = 3.dp)
+                    .height(if (compact) 32.dp else 40.dp)
+                    .background(MikuColors.Primary, RoundedCornerShape(6.dp))
+                    .clickableNoRipple(onSave),
+                contentAlignment = Alignment.Center,
+            ) { Text("保存", color = MikuColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
         }
     }
 }

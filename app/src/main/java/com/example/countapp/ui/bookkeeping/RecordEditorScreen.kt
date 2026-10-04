@@ -37,7 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -130,12 +130,11 @@ private fun RecordEditorContent(
     var note by remember(editingKey) { mutableStateOf(editing?.note.orEmpty()) }
     var date by remember(editingKey) { mutableStateOf(editing?.localDate() ?: LocalDate.now()) }
     var showDatePicker by remember(editingKey) { mutableStateOf(false) }
-    var showAddCategory by remember(editingKey) { mutableStateOf(false) }
+    var showCategorySettings by remember(editingKey) { mutableStateOf(false) }
     var showDeleteConfirm by remember(editingKey) { mutableStateOf(false) }
     var errorMessage by remember(editingKey) { mutableStateOf<String?>(null) }
 
-    // 分類清單會因為新增自訂分類而變動，用一個版本號強制重算
-    var categoryVersion by remember { mutableIntStateOf(0) }
+    val categoryVersion by container.categoryStore.revision.collectAsState()
     val categories = remember(selectedType, categoryVersion) {
         container.categoryStore.categoriesFor(selectedType)
     }
@@ -153,7 +152,7 @@ private fun RecordEditorContent(
         keyboard?.hide()
         focusManager.clearFocus()
     }
-    BackHandler(onBack = dismiss)
+    BackHandler(enabled = !showCategorySettings, onBack = dismiss)
 
     val categoryContent: @Composable ColumnScope.() -> Unit = {
         // ===== 標題列（標題置中，關閉鈕靠右，兩者不互相擠壓）=====
@@ -237,14 +236,14 @@ private fun RecordEditorContent(
                 keyboard?.hide()
                 focusManager.clearFocus()
             },
-            onAddCategory = { showAddCategory = true },
+            onCategorySettings = { keyboard?.hide(); focusManager.clearFocus(); showCategorySettings = true },
         )
 
     }
     val inputContent: @Composable (Boolean) -> Unit = { compact ->
         RecordEditorInput(
             category = categories.firstOrNull { it.name == selectedCategory }
-                ?: container.categoryStore.findAny(selectedCategory.orEmpty()),
+                ?: container.categoryStore.findForRecord(selectedType, selectedCategory.orEmpty()),
             categoryName = selectedCategory ?: "請選擇分類",
             showNumberPad = !imeVisible,
             compactNumberPad = compact,
@@ -355,18 +354,11 @@ private fun RecordEditorContent(
         }
     }
 
-    // ===== 新增自訂分類 =====
-    if (showAddCategory) {
-        AddCategoryDialog(
-            type = selectedType,
-            onDismiss = { showAddCategory = false },
-            onCreate = { name, iconKey, colorArgb ->
-                if (container.categoryStore.addCustomCategory(selectedType, name, iconKey, colorArgb)) {
-                    categoryVersion++
-                    selectedCategory = name
-                }
-                showAddCategory = false
-            },
+    if (showCategorySettings) {
+        CategorySettingsScreen(container, initialType = selectedType,
+            onDismiss = { showCategorySettings = false },
+            onRenamed = { type, old, name -> if (type == selectedType && selectedCategory == old) selectedCategory = name },
+            onDeleted = { type, name -> if (type == selectedType && selectedCategory == name) selectedCategory = null },
         )
     }
 

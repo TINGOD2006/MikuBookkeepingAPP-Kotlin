@@ -13,7 +13,7 @@
 
     <!-- 前台服務（讓通知監聽服務在 App 被滑掉後仍能存活） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- 啟用 API 33+ 原生返回分派；編輯器與子對話框各自處理返回。 -->
     <application
@@ -47,9 +47,11 @@
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true"
             android:enabled="true"
-            android:directBootAware="true"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="specialUse"
             android:label="@string/notification_listener_label">
+            <!-- 持續接收用戶授權的交易通知並即時記帳，不是有期限的資料同步工作。 -->
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-enabled continuous payment notification monitoring and automatic local bookkeeping" />
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>

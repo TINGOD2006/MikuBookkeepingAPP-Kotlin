@@ -67,6 +67,9 @@ class MainActivity : ComponentActivity() {
      */
     override fun onResume() {
         super.onResume()
+        if (com.example.countapp.notification.PaymentNotificationListenerService.isNotificationAccessGranted(this)) {
+            com.example.countapp.notification.PaymentNotificationListenerService.requestRebindService(this)
+        }
         (application as MikuApplication).container.setAppInForeground(true)
         (application as MikuApplication).container.refreshRecordsInBackground()
     }

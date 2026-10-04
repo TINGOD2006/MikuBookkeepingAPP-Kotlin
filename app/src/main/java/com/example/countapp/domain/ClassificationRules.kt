@@ -23,6 +23,10 @@ object ClassificationRules {
      *    （先命中者勝），Flutter 版的 Map 也是有序的。
      */
     val defaultRules: Map<String, List<String>> = linkedMapOf(
+        // 具體費用先於「商家／轉帳」等泛稱，避免常見支出被搶走分類。
+        "訂閱" to listOf("訂閱", "subscription", "icloud", "會員月費", "會員年費"),
+        "手續費" to listOf("手續費", "服務費", "銀行費用", "handling fee", "transaction fee"),
+        "日用品" to listOf("日用品", "洗衣液", "洗衣粉", "衛生紙", "清潔用品", "洗潔精", "牙膏"),
         "食物" to listOf(
             "food", "餐", "吃", "restaurant", "午餐", "晚餐", "早餐", "下午茶",
             "餐廳", "便當", "外賣", "delivery", "eat", "meal", "cafe", "coffee",
@@ -71,7 +75,12 @@ object ClassificationRules {
         "捐款" to listOf("捐款", "捐贈", "慈善", "公益", "fund", "donate", "紅十字會"),
         "紅包" to listOf("紅包", "禮金", "包紅", "結婚", "喜宴", "生日禮物"),
         "轉帳" to listOf("轉賬", "轉帳", "transfer", "轉帳成功", "轉賬成功", "轉帳給", "轉賬給"),
-    )
+    ).apply {
+        // 沒有內建詞條的分類仍是合法分類，可在規則編輯器與 AI 候選中使用。
+        (CategoryCatalog.defaultExpenseCategories + CategoryCatalog.defaultIncomeCategories).forEach {
+            putIfAbsent(it.name, emptyList())
+        }
+    }
 
     /**
      * 合併自訂與內建規則。
@@ -83,7 +92,7 @@ object ClassificationRules {
         val merged = linkedMapOf<String, List<String>>()
         customRules.forEach { (category, words) ->
             val cleaned = words.map { it.trim() }.filter { it.isNotEmpty() }
-            if (cleaned.isNotEmpty()) merged[category] = cleaned
+            if (words.isEmpty() || cleaned.isNotEmpty()) merged[category] = cleaned
         }
         defaultRules.forEach { (category, words) ->
             merged.putIfAbsent(category, words)
@@ -110,4 +119,11 @@ object ClassificationRules {
 
     /** 使用內建規則分類。 */
     fun classify(text: String): String = classifyWith(text, defaultRules)
+
+    /** 解析 AI 回覆，只接受已知名稱；容許服務在名稱外添加說明。 */
+    fun resolveAiCategory(content: String, known: Collection<String>): String? {
+        known.firstOrNull { content.trim() == it }?.let { return it }
+        // 名稱重疊時優先最長者，避免「保險理賠」被「保險」截斷。
+        return known.sortedByDescending { it.length }.firstOrNull { content.contains(it) }
+    }
 }

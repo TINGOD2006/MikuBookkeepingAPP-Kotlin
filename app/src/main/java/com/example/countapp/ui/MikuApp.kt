@@ -6,15 +6,15 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -160,6 +160,7 @@ fun MikuApp(container: AppContainer) {
                         MikuBottomBar(
                             selectedIndex = selectedTab,
                             onSelect = { selectedTab = it },
+                            onAddRecord = { editingRecord = null; showAddRecord = true },
                         )
                     },
                 ) { innerPadding ->
@@ -188,18 +189,6 @@ fun MikuApp(container: AppContainer) {
                         }
                     }
                 }
-
-                // 中央的記帳按鈕
-                MikuFab(
-                    onClick = {
-                        editingRecord = null
-                        showAddRecord = true
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(bottom = 12.dp),
-                )
 
                 // 自動記錄（MPay 等）完成後的圓球：浮在整個 App 的最上層，
                 // 點一下＝開啟這筆記錄的編輯頁；不理它記錄也已經存好了。
@@ -246,7 +235,7 @@ fun MikuApp(container: AppContainer) {
                     hint = "請確認分類與備註；直接關閉即保留自動分類（${record.note}）",
                     onDismiss = {
                         showAutoRecordEditor = false
-                        container.clearAutoRecordPrompt()
+                        container.clearAutoRecordPrompt(record.id)
                     },
                 )
             }
@@ -266,29 +255,31 @@ fun MikuApp(container: AppContainer) {
 /** 底部導覽列高度。圓球要疊在它正上方，兩處必須用同一個值。 */
 private val BottomBarHeight: Dp = 72.dp
 
-/** 自動記錄圓球的直徑（比中央記帳鈕 56dp 略大，兩顆不會左右打架）。 */
+/** 自動記錄圓球的直徑；中央新增按鈕獨立放在底部欄內。 */
 private val AutoRecordBallSize: Dp = 60.dp
 
-/** 底部導覽列：四個項目，中央留空給記帳按鈕（與 Flutter 版配置相同）。 */
+/** 五個按鈕在同一列，中心距由內側 16% 寬向外增至 24% 寬。 */
 @Composable
 private fun MikuBottomBar(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
+    onAddRecord: () -> Unit,
 ) {
-    Row(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .background(MikuColors.Background)
             .navigationBarsPadding()
             .height(BottomBarHeight),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        BottomBarItem(Icons.Filled.Home, "明細", selectedIndex == 0) { onSelect(0) }
-        BottomBarItem(Icons.AutoMirrored.Filled.MenuBook, "預算", selectedIndex == 1) { onSelect(1) }
-        Spacer(modifier = Modifier.width(90.dp))
-        BottomBarItem(Icons.Filled.Analytics, "分析", selectedIndex == 2) { onSelect(2) }
-        BottomBarItem(Icons.Filled.Person, "我的", selectedIndex == 3) { onSelect(3) }
+        val itemWidth = maxWidth * 0.16f
+        fun itemAt(center: Float) = Modifier.align(Alignment.CenterStart)
+            .offset(x = maxWidth * center - itemWidth / 2).width(itemWidth)
+        BottomBarItem(Icons.Filled.Home, "明細", selectedIndex == 0, itemAt(0.10f)) { onSelect(0) }
+        BottomBarItem(Icons.AutoMirrored.Filled.MenuBook, "預算", selectedIndex == 1, itemAt(0.34f)) { onSelect(1) }
+        MikuFab(onClick = onAddRecord, modifier = Modifier.align(Alignment.Center))
+        BottomBarItem(Icons.Filled.Analytics, "分析", selectedIndex == 2, itemAt(0.66f)) { onSelect(2) }
+        BottomBarItem(Icons.Filled.Person, "我的", selectedIndex == 3, itemAt(0.90f)) { onSelect(3) }
     }
 }
 
@@ -297,14 +288,15 @@ private fun BottomBarItem(
     icon: ImageVector,
     label: String,
     selected: Boolean,
+    modifier: Modifier,
     onClick: () -> Unit,
 ) {
     val tint = if (selected) MikuColors.Primary else MikuColors.TextSecondary
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .size(width = 72.dp, height = 56.dp)
+        modifier = modifier
+            .height(56.dp)
             .clickableNoRipple(onClick),
     ) {
         Spacer(modifier = Modifier.height(8.dp))
@@ -314,6 +306,8 @@ private fun BottomBarItem(
             text = label,
             color = tint,
             fontSize = 11.sp,
+            lineHeight = 14.sp,
+            maxLines = 1,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         )
     }
@@ -324,16 +318,17 @@ private fun MikuFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .size(56.dp)
-            .background(MikuColors.Primary, CircleShape)
             .clickableNoRipple(onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            imageVector = Icons.Filled.Add,
-            contentDescription = "新增記錄",
-            tint = MikuColors.Text,
-            modifier = Modifier.size(30.dp),
-        )
+        Box(Modifier.size(44.dp).background(MikuColors.Primary, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = "新增記錄",
+                tint = MikuColors.Text,
+                modifier = Modifier.size(24.dp),
+            )
+        }
     }
 }
 

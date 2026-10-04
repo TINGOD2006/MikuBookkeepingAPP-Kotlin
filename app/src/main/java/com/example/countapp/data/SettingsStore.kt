@@ -20,25 +20,51 @@ class SettingsStore(
 
     // ========== 自動記帳 ==========
 
+    private val _autoRecordEnabled = MutableStateFlow(prefs.getBoolean(KEY_AUTO_RECORD, false))
+    val autoRecordEnabledFlow: StateFlow<Boolean> = _autoRecordEnabled.asStateFlow()
+    private val _useAiClassification = MutableStateFlow(prefs.getBoolean(KEY_USE_AI, true))
+    val useAiClassificationFlow: StateFlow<Boolean> = _useAiClassification.asStateFlow()
+    private val _backgroundNotificationEnabled = MutableStateFlow(prefs.getBoolean(KEY_BACKGROUND_NOTIFICATION, false))
+    val backgroundNotificationEnabledFlow: StateFlow<Boolean> = _backgroundNotificationEnabled.asStateFlow()
+    private val _budgetNotificationEnabled = MutableStateFlow(prefs.getBoolean(KEY_BUDGET_NOTIFICATION, true))
+    val budgetNotificationEnabledFlow: StateFlow<Boolean> = _budgetNotificationEnabled.asStateFlow()
+
+    /** 同一份狀態供 UI 與服務使用，先持久保存再通知觀察者。 */
+    private fun setBoolean(key: String, value: Boolean, state: MutableStateFlow<Boolean>) {
+        prefs.edit().putBoolean(key, value).apply()
+        state.value = value
+    }
+
     /** 自動記錄開關。預設關閉（與 Flutter 版一致，需使用者主動開啟）。 */
     var autoRecordEnabled: Boolean
-        get() = prefs.getBoolean(KEY_AUTO_RECORD, false)
-        set(value) = prefs.edit().putBoolean(KEY_AUTO_RECORD, value).apply()
+        get() = _autoRecordEnabled.value
+        set(value) = setBoolean(KEY_AUTO_RECORD, value, _autoRecordEnabled)
 
     /** 是否使用 AI 分類（關閉時走內建規則表，不消耗 AI 額度）。 */
     var useAiClassification: Boolean
-        get() = prefs.getBoolean(KEY_USE_AI, true)
-        set(value) = prefs.edit().putBoolean(KEY_USE_AI, value).apply()
+        get() = _useAiClassification.value
+        set(value) = setBoolean(KEY_USE_AI, value, _useAiClassification)
 
     /** 背景常駐通知（讓服務在被滑掉後仍存活）。 */
     var backgroundNotificationEnabled: Boolean
-        get() = prefs.getBoolean(KEY_BACKGROUND_NOTIFICATION, false)
-        set(value) = prefs.edit().putBoolean(KEY_BACKGROUND_NOTIFICATION, value).apply()
+        get() = _backgroundNotificationEnabled.value
+        set(value) = setBoolean(KEY_BACKGROUND_NOTIFICATION, value, _backgroundNotificationEnabled)
 
     /** 預算提醒通知。 */
     var budgetNotificationEnabled: Boolean
-        get() = prefs.getBoolean(KEY_BUDGET_NOTIFICATION, true)
-        set(value) = prefs.edit().putBoolean(KEY_BUDGET_NOTIFICATION, value).apply()
+        get() = _budgetNotificationEnabled.value
+        set(value) = setBoolean(KEY_BUDGET_NOTIFICATION, value, _budgetNotificationEnabled)
+
+    /** 僅保存尚待確認的記錄 id；帳目內容仍由記錄庫管理。 */
+    var pendingPromptIds: List<String>
+        get() = runCatching {
+            val array = JSONArray(prefs.getString("pending_auto_record_ids", "[]"))
+            (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+                .distinct().takeLast(10)
+        }.getOrDefault(emptyList())
+        set(value) {
+            prefs.edit().putString("pending_auto_record_ids", JSONArray(value.filter(String::isNotBlank).distinct().takeLast(10)).toString()).apply()
+        }
 
     /**
      * 自動記帳浮球（同時控制付款 App 上的系統浮球與 App 內右下角浮球）。
@@ -159,7 +185,8 @@ class SettingsStore(
                                 if (word.isNotEmpty()) add(word)
                             }
                         }
-                        if (words.isNotEmpty()) put(category, words)
+                        // 空陣列代表用戶明確停用此分類，不應在重開時恢復內建詞條。
+                        put(category, words)
                     }
                 }
             } catch (e: Exception) {
@@ -175,8 +202,11 @@ class SettingsStore(
         }
 
     /** 自訂 + 內建合併後的有效規則表。 */
-    fun effectiveRules(): Map<String, List<String>> =
-        ClassificationRules.mergeRules(customRules)
+    fun effectiveRules(): Map<String, List<String>> {
+        val categories = CategoryStore(prefs)
+        val visible = com.example.countapp.domain.CategoryCatalog.TYPES.flatMap { categories.categoriesFor(it) }.map { it.name }.toSet()
+        return ClassificationRules.mergeRules(customRules).filterKeys { it in visible }
+    }
 
     /** 恢復內建規則。 */
     fun resetRules() {

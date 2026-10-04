@@ -3,6 +3,8 @@ package com.example.countapp.notification
 import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.app.KeyguardManager
+import android.os.PowerManager
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -44,7 +46,17 @@ internal class AutoRecordOverlay(private val service: AccessibilityService) {
      */
     fun render(pending: List<Record>, appInForeground: Boolean, enabled: Boolean) {
         record = pending.firstOrNull()
-        if (record == null || appInForeground || !enabled) { hide(); return }
+        val locked = service.getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        val interactive = service.getSystemService(PowerManager::class.java).isInteractive
+        if (record == null || appInForeground || !enabled || locked || !interactive) { hide(); return }
+        // 系統移除過視窗時不能再拿舊 View 當成已顯示；下一次 render 重新建立。
+        if (ball?.isAttachedToWindow == false) hide()
+        val metrics = service.resources.displayMetrics
+        val oldX = params.x
+        val oldY = params.y
+        params.x = params.x.coerceIn(0, (metrics.widthPixels - size).coerceAtLeast(0))
+        params.y = params.y.coerceIn(0, (metrics.heightPixels - size).coerceAtLeast(0))
+        if (ball != null && (oldX != params.x || oldY != params.y)) manager.updateViewLayout(ball, params)
         val view = ball ?: createBall().also {
             // 系統撤銷服務權限時，通知與 App 內小球仍可操作。
             manager.addView(it, params)

@@ -18,6 +18,17 @@ import org.junit.Test
 class CategoryStoreTest {
 
     @Test
+    fun `新增預設分類不重複舊版同名自訂分類且保留用戶圖示`() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit().putString(CategoryStore.KEY_CUSTOM_EXPENSE,
+            """[{"name":"食物","iconKey":"star","colorArgb":4294198070}]""").apply()
+        val store = CategoryStore(prefs)
+        assertEquals(1, store.categoriesFor(TYPE_EXPENSE).count { it.name == "食物" })
+        assertEquals("star", store.find(TYPE_EXPENSE, "食物")?.iconKey)
+        assertTrue(store.find(TYPE_EXPENSE, "食物")!!.isCustom)
+    }
+
+    @Test
     fun `新增的自訂分類會出現在清單最後`() {
         val store = CategoryStore(FakeSharedPreferences())
 
