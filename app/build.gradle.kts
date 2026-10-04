@@ -35,8 +35,11 @@ android {
         applicationId = "com.example.countapp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "2.0.0"
+        // 2.0.1 起改用固定簽章的 release keystore（見下方 signingConfigs）。
+        // versionCode 必須比已發布的 2.0.0（versionCode 2）大，安裝在手機上的
+        // 舊版才能被直接覆蓋升級。
+        versionCode = 3
+        versionName = "2.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
