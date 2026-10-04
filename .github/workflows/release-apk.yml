@@ -1,0 +1,70 @@
+# 推 tag（例如 v2.0.0）時自動建置 APK，並掛到 GitHub Release 供人下載。
+# 也可以在 Actions 頁面用「Run workflow」手動觸發，此時只上傳 Artifact、不建 Release。
+#
+# 為什麼 APK 不放進 git：二進位檔每改一版就多存一份完整歷史，repo 會膨脹、clone 變慢。
+# Release 附件才是編譯產物的正確去處。
+
+name: Build & Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# 建立 Release 需要寫入權限；其餘一律唯讀。
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ⚠️ 用 JDK 21：與本機已驗證可建置的環境一致。
+      #    gradlew 在 git 裡是 100644（沒有執行權限），Linux runner 上必須 chmod。
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # ⚠️ compileSdk 固定 36（見 app/build.gradle.kts），所以 platform 36 一定要有。
+      #    runner 映像不保證已預裝，這裡明確安裝並先接受授權。
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # ⚠️ 不需要任何 keystore secret：app/build.gradle.kts 的 release buildType
+      #    目前沿用 debug 簽章（第 42 行），CI 會自動產生 debug keystore。
+      #    若之後改用正式的 release keystore，記得把 keystore 走 GitHub Secrets，
+      #    千萬不要 commit 進 repo。
+      - name: Build release APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --console=plain --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: miku-bookkeeping-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true
