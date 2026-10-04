@@ -9,3 +9,8 @@
 .cxx
 local.properties
 /app/build
+
+# 簽章用 keystore：絕對不要進版控（CI 走 GitHub Secrets）
+/.signing/
+*.jks
+*.keystore

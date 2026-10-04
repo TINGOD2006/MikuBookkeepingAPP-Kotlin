@@ -3,6 +3,13 @@
 #
 # 為什麼 APK 不放進 git：二進位檔每改一版就多存一份完整歷史，repo 會膨脹、clone 變慢。
 # Release 附件才是編譯產物的正確去處。
+#
+# ⚠️ 需要的 Repository secrets（Settings → Secrets and variables → Actions）：
+#      KEYSTORE_BASE64     簽章 keystore 的 base64（內容見 .signing/KEYSTORE_BASE64.txt）
+#      KEYSTORE_PASSWORD   keystore 密碼
+#      KEY_ALIAS           固定簽章用的 alias（本專案是 miku；留空會自動用 miku）
+#    少了 keystore，下面的「Decode signing keystore」會直接讓 job 失敗——這是刻意的：
+#    寧可紅燈，也不要默默發出一個簽章不同、使用者無法覆蓋升級的 APK。
 
 name: Build & Release APK
 
@@ -50,14 +57,36 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # ⚠️ 不需要任何 keystore secret：app/build.gradle.kts 的 release buildType
-      #    目前沿用 debug 簽章（第 42 行），CI 會自動產生 debug keystore。
-      #    若之後改用正式的 release keystore，記得把 keystore 走 GitHub Secrets，
-      #    千萬不要 commit 進 repo。
+      # 固定簽章：把 Secrets 裡的 keystore 還原成檔案，再用環境變數交給 Gradle
+      # （app/build.gradle.kts 讀 MIKU_KEYSTORE_FILE 等變數）。
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::尚未設定 KEYSTORE_BASE64 / KEYSTORE_PASSWORD，無法產生固定簽章的 APK。設定方式見本 workflow 檔開頭。"
+            exit 1
+          fi
+          KS="$RUNNER_TEMP/miku-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$KS"
+          echo "MIKU_KEYSTORE_FILE=$KS" >> "$GITHUB_ENV"
+          echo "MIKU_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "MIKU_KEY_ALIAS=${KEY_ALIAS:-miku}" >> "$GITHUB_ENV"
+          echo "MIKU_KEY_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Build release APK
         run: |
           chmod +x ./gradlew
           ./gradlew assembleRelease --console=plain --stacktrace
+
+      # 把簽章指紋印進 log，日後可一眼比對「這版和上版是不是同一把 key」。
+      - name: Verify APK signature
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" \
+            | grep -i "SHA-256 digest"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

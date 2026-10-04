@@ -5,6 +5,16 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// ── release 簽章來源 ────────────────────────────────────────────
+// CI 由 GitHub Actions 把 Secrets 解碼成 keystore 檔，再用環境變數傳進來；
+// 本機也可以在 PowerShell 設定同樣的環境變數，產生與 CI 相同簽章的 APK。
+// 沒設定時 hasMikuKeystore 為 false，release 會退回 debug 簽章。
+val mikuKeystorePath: String? = System.getenv("MIKU_KEYSTORE_FILE")
+val mikuKeystorePassword: String? = System.getenv("MIKU_KEYSTORE_PASSWORD")
+val mikuKeyAlias: String = System.getenv("MIKU_KEY_ALIAS") ?: "miku"
+val mikuKeyPassword: String? = System.getenv("MIKU_KEY_PASSWORD") ?: mikuKeystorePassword
+val hasMikuKeystore: Boolean = mikuKeystorePath != null && file(mikuKeystorePath).exists()
+
 android {
     namespace = "com.example.countapp"
 
@@ -31,6 +41,18 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        // 只有環境變數齊全時才建立；否則由下面的 buildTypes.release 退回 debug。
+        if (hasMikuKeystore) {
+            create("release") {
+                storeFile = file(mikuKeystorePath!!)
+                storePassword = mikuKeystorePassword
+                keyAlias = mikuKeyAlias
+                keyPassword = mikuKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -38,8 +60,14 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // 與 Flutter 版一致：沿用 debug 簽章，讓 sideload 升級可以覆蓋安裝
-            signingConfig = signingConfigs.getByName("debug")
+            // ⚠️ 固定簽章：CI 由 GitHub Secrets 提供 keystore，確保每一版簽章一致，
+            //    使用者才能直接覆蓋升級（否則每台機器／每次 CI 的 debug key 都不同）。
+            //    本機沒設環境變數時退回 debug 簽章，方便直接試編。
+            signingConfig = if (hasMikuKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
