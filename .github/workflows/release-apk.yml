@@ -81,12 +81,25 @@ jobs:
           chmod +x ./gradlew
           ./gradlew assembleRelease --console=plain --stacktrace
 
-      # 把簽章指紋印進 log，日後可一眼比對「這版和上版是不是同一把 key」。
+      # ⚠️ 硬性關卡：確認這顆 APK 真的是用「固定簽章 keystore」簽出來的。
+      #    只檢查 Build 成功是不夠的——如果 MIKU_* 環境變數沒傳進 Gradle，
+      #    app/build.gradle.kts 會默默退回 debug 簽章，Build 依然成功，但使用者
+      #    就無法覆蓋升級。所以這裡指紋對不上就直接讓 job 失敗（紅燈勝過默默發錯檔）。
+      #    預期指紋來源：.signing 的 keystore 憑證（見 .signing/SECRETS.txt）。
+      #    ⚠️ 日後若更換 keystore，這個 EXPECTED_SHA256 必須一起更新。
       - name: Verify APK signature
+        env:
+          EXPECTED_SHA256: "ab2a2f4bef6d753aab49a05f57cf34469b88669cbebf16dff41c9e13b3745154"
         run: |
           APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" \
-            | grep -i "SHA-256 digest"
+          CERTS=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK")
+          echo "$CERTS" | grep -i "SHA-256 digest" || true
+          if echo "$CERTS" | grep -qi "$EXPECTED_SHA256"; then
+            echo "::notice::APK 簽章正確：與固定 keystore 指紋一致（$EXPECTED_SHA256），使用者可覆蓋升級。"
+          else
+            echo "::error::APK 不是用固定 keystore 簽的（預期指紋 $EXPECTED_SHA256）。發出這一版會讓使用者無法覆蓋升級。"
+            exit 1
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
