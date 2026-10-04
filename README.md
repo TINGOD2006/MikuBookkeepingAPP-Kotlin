@@ -1,5 +1,19 @@
 # Miku 記帳 — Android 原生版（Kotlin + Jetpack Compose）
 
+## 📥 下載 APK
+
+[![最新版本](https://img.shields.io/github/v/release/TINGOD2006/MikuBookkeepingAPP-Kotlin?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=2f81f7)](https://github.com/TINGOD2006/MikuBookkeepingAPP-Kotlin/releases/latest)
+
+| | |
+|---|---|
+| **最新版 APK（直接下載）** | [`app-release.apk`](https://github.com/TINGOD2006/MikuBookkeepingAPP-Kotlin/releases/latest/download/app-release.apk) |
+| **所有版本 / 更新說明** | [Releases](https://github.com/TINGOD2006/MikuBookkeepingAPP-Kotlin/releases) |
+
+不需要自己編譯：每次推送 `v*` 標籤（例如 `v2.0.0`）時，[GitHub Actions](.github/workflows/release-apk.yml) 會自動建置 release APK 並附加到 GitHub Release 供下載。想自行建置可 clone 後執行 `./gradlew assembleRelease`（產物在 `app/build/outputs/apk/release/`）。
+
+> **安裝提示**
+> 若裝置上已裝過**不同簽章**的同一款 App（例如你在自己電腦上編譯的版本），請先解除安裝再安裝 Release 版，否則 Android 會以「簽章不符」拒絕安裝（解除安裝會一併清除已儲存的記帳資料，請先備份）。
+
 ## 2026-10-04 類別設定與鍵盤布局
 
 數字鍵盤的 0 對齊 1、2、3 三欄，保存移至同列右側。記帳分類網格的「設定」開啟類別設定頁，支出／收入分開排列，每列可編輯、刪除及拖曳排序，底部固定新增類別。預設與自訂分類都可管理，排序立即保存；改名同步歷史帳目、垃圾桶、各月份預算及分類規則，刪除分類保留歷史資料。分類對話框避讓系統鍵盤，操作按鈕保持可見。
