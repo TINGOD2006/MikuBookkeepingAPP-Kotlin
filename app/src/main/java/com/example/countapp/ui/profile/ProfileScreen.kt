@@ -151,7 +151,8 @@ fun ProfileScreen(container: AppContainer) {
                 SettingSwitchRow(Icons.Filled.PlayCircle, "自動記錄", autoEnabled) {
                     settings.autoRecordEnabled = it
                 }
-                if (autoEnabled || backgroundEnabled) AutoRecordPermissions()
+                AutoRecordModeSetting(settings)
+                if (autoEnabled || backgroundEnabled) AutoRecordPermissions(settings)
 
                 // 浮球是自動記錄的提醒入口（付款 App 上的系統浮球 + App 內右下角浮球），
                 // 關掉只影響「提醒」，記錄照樣寫入，不會漏帳。
@@ -159,36 +160,19 @@ fun ProfileScreen(container: AppContainer) {
                     settings.floatingBallEnabled = it
                 }
 
-                SettingSwitchRow(Icons.Filled.Psychology, "AI 分類", aiEnabled) {
-                    settings.useAiClassification = it
-                }
-
-                SettingRow(Icons.Filled.Info, "分類方式") {
-                    StatusChip(
-                        text = if (!autoEnabled) {
-                            "⏸️ 已停用"
-                        } else if (aiEnabled && settings.isAiConfigured) {
-                            "🤖 AI 分類"
-                        } else {
-                            if (aiEnabled) "📋 規則表（AI 尚未設定）" else "📋 規則表分類"
-                        },
-                    )
-                }
-
-                SettingRow(Icons.Filled.Key, "AI API 設定") {
-                    TextButton(onClick = { showAiDialog = true }) {
-                        Text("設定", color = MikuColors.Primary, fontSize = 13.sp)
-                    }
-                }
-
-                if (settings.isAiConfigured) {
-                    SettingRow(Icons.Filled.Badge, "目前 AI 設定") {
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Psychology, contentDescription = null, tint = MikuColors.Primary, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("AI 分類", color = MikuColors.Text, fontSize = 14.sp)
                         Text(
-                            text = "${settings.aiModel} ・ Key: ${settings.maskedApiKey}",
-                            color = MikuColors.TextSecondary,
-                            fontSize = 11.sp,
+                            if (aiEnabled && settings.isAiConfigured) "已設定 · ${settings.aiModel}"
+                            else if (aiEnabled) "尚未設定，先使用規則表" else "已關閉，使用規則表",
+                            color = MikuColors.TextSecondary, fontSize = 11.sp,
                         )
                     }
+                    TextButton(onClick = { showAiDialog = true }) { Text("設定", color = MikuColors.Primary) }
+                    androidx.compose.material3.Switch(checked = aiEnabled, onCheckedChange = { settings.useAiClassification = it })
                 }
 
                 SettingRow(Icons.Filled.Security, "自動記錄應用") {
@@ -446,12 +430,12 @@ private fun ProbeDialog(onDismiss: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    "啟用後會讀取微信／支付寶／AlipayHK／MPay 的付款結果畫面，" +
-                        "判定為「已完成交易」時自動記一筆（需要「自動記錄」開關也是開啟的）。\n" +
+                    "在「記錄方式」選擇「通知＋無障礙讀取」後，會讀取所選 App 的付款結果畫面。" +
+                        "MPay 由通知建立帳目，畫面只補充可精確核對的資料；交易編號不是入帳的必要條件。\n" +
                         "記完會直接在支付介面浮出可拖動圓球，點一下就能補分類與備註" +
                         "（不理它也不會漏記）。圓球可以在「我的」頁用「自動記帳浮球」開關關掉，" +
                         "關掉後仍然會照常記錄。\n" +
-                        "記錄日期優先採用畫面顯示的交易時間（畫面沒寫才用讀到的當下時間）。\n" +
+                        "歷史帳單與轉帳輸入頁不會建立新的 MPay 帳目。\n" +
                         "下面的紀錄是讀屏診斷：每筆都標了讀取時間，" +
                         "🟡 代表看到類似交易但沒有明確成功字樣，因此不會被記錄。",
                     color = MikuColors.TextSecondary,

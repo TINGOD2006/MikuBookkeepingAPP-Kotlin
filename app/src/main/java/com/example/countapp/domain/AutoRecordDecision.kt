@@ -107,16 +107,16 @@ object AutoRecordDecisionMaker {
      * @param requireCompletionSignal 讀屏來源請傳 true（見 [COMPLETION_PATTERNS]）
      * @return null 表示不該自動記帳（廣告、非交易格式、取不到金額、尚未完成、交易失敗）
      */
-    fun decide(text: String, requireCompletionSignal: Boolean = false): AutoRecordDecision? {
+    fun decide(text: String, requireCompletionSignal: Boolean = false,
+               rejectPending: Boolean = requireCompletionSignal): AutoRecordDecision? {
         val normalized = text.trim()
         if (normalized.isEmpty()) return null
 
         if (PaymentTextAnalyzer.isAdvertisement(normalized)) return null
         if (!PaymentTextAnalyzer.hasPaymentSignal(normalized)) return null
         if (FAILURE_PATTERNS.any { it.containsMatchIn(normalized) }) return null
+        if (rejectPending && PENDING_PATTERNS.any { it.containsMatchIn(normalized) }) return null
         if (requireCompletionSignal) {
-            // 未完成的頁面（轉賬請求、待確認、請輸入金額…）一律不記
-            if (PENDING_PATTERNS.any { it.containsMatchIn(normalized) }) return null
             if (COMPLETION_PATTERNS.none { it.containsMatchIn(normalized) }) return null
         }
 
@@ -133,6 +133,7 @@ object AutoRecordDecisionMaker {
             merchant = merchant,
             note = buildNote(normalized, merchant, isIncome),
             fingerprint = fingerprint(normalized),
+            transactionId = TransactionIdentity.extract(normalized),
         )
     }
 

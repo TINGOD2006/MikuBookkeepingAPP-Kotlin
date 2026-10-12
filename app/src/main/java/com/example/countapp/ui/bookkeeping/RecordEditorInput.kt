@@ -22,6 +22,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +54,7 @@ internal fun RecordEditorInput(
     note: String,
     date: LocalDate,
     isEditing: Boolean,
+    allowClearNote: Boolean = false,
     onKey: (String) -> Unit,
     onNoteChange: (String) -> Unit,
     onPickDate: () -> Unit,
@@ -59,6 +64,7 @@ internal fun RecordEditorInput(
     // 備註使用系統鍵盤，數字鍵盤僅在系統鍵盤收起後顯示。
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+    val noteFocus = remember { FocusRequester() }
 
     Column(
         modifier = Modifier
@@ -104,7 +110,7 @@ internal fun RecordEditorInput(
             OutlinedTextField(
                 value = note,
                 onValueChange = onNoteChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).focusRequester(noteFocus),
                 singleLine = true,
                 // 備註只是輔助欄位：按「完成」就收鍵盤，讓自製數字鍵盤回到可見範圍
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -144,9 +150,15 @@ internal fun RecordEditorInput(
 
         Spacer(modifier = Modifier.height(6.dp))
 
+        if (allowClearNote) TextButton(onClick = {
+            onNoteChange("")
+            noteFocus.requestFocus()
+            keyboard?.show()
+        }) { Text("清除原始備註", color = MikuColors.Primary, fontSize = 12.sp) }
+
         // 編寫備註時由系統鍵盤接替數字鍵盤，避免兩個鍵盤擠掉分類區。
         if (showNumberPad) {
-            NumberPad(compact = compactNumberPad, onSave = onSave, onKey = { key ->
+            AmountKeypad(compact = compactNumberPad, onSave = onSave, onKey = { key ->
                 focusManager.clearFocus()
                 onKey(key)
             })
@@ -198,93 +210,4 @@ internal fun RecordEditorInput(
         }
     }
 }
-
-/** 最末列的 0 對齊三個數字欄，保存佔第四欄。 */
-@Composable
-private fun NumberPad(compact: Boolean, onSave: () -> Unit, onKey: (String) -> Unit) {
-    val rows = listOf(
-        listOf("7", "8", "9", "⌫"),
-        listOf("4", "5", "6", "清空"),
-        listOf("1", "2", "3", "."),
-    )
-
-    Column {
-        rows.forEach { row ->
-            Row(modifier = Modifier.fillMaxWidth()) {
-                row.forEach { key ->
-                    KeyButton(key = key, flex = 1, compact = compact, onKey = onKey)
-                }
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-        }
-        Row(modifier = Modifier.fillMaxWidth()) {
-            KeyButton(key = "0", flex = 3, compact = compact, onKey = onKey)
-            Box(
-                Modifier.weight(1f).padding(horizontal = 3.dp)
-                    .height(if (compact) 32.dp else 40.dp)
-                    .background(MikuColors.Primary, RoundedCornerShape(6.dp))
-                    .clickableNoRipple(onSave),
-                contentAlignment = Alignment.Center,
-            ) { Text("保存", color = MikuColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
-        }
-    }
-}
-
-@Composable
-private fun androidx.compose.foundation.layout.RowScope.KeyButton(
-    key: String,
-    flex: Int,
-    compact: Boolean,
-    onKey: (String) -> Unit,
-) {
-    val isSpecial = key == "清空" || key == "⌫"
-
-    Box(
-        modifier = Modifier
-            .weight(flex.toFloat())
-            .padding(horizontal = 3.dp)
-            .height(if (compact) 32.dp else 40.dp)
-            .background(
-                if (isSpecial) MikuColors.SurfaceVariant else MikuColors.Background,
-                RoundedCornerShape(6.dp),
-            )
-            .clickableNoRipple { onKey(key) },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = key,
-            color = if (isSpecial) MikuColors.Secondary else MikuColors.Text,
-            fontSize = if (isSpecial) 12.sp else 18.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-/**
- * 數字鍵盤的輸入規則（與 Flutter 版一致）：
- *   - 小數點只能有一個
- *   - 小數最多兩位
- *   - 整數最多九位
- */
-internal fun applyAmountKey(current: String, key: String): String = when (key) {
-    "清空" -> "0"
-    "⌫" -> if (current.length > 1) current.dropLast(1) else "0"
-    "." -> if (current.contains('.')) current else "$current."
-    else -> appendDigit(current, key)
-}
-
-private fun appendDigit(current: String, digit: String): String {
-    val dotIndex = current.indexOf('.')
-
-    if (dotIndex >= 0) {
-        val decimals = current.length - dotIndex - 1
-        if (decimals >= AmountFormatter.DECIMAL_PLACES) return current
-        return current + digit
-    }
-
-    if (current.length >= MAX_INTEGER_DIGITS) return current
-    return if (current == "0") digit else current + digit
-}
-
-private const val MAX_INTEGER_DIGITS = 9
 

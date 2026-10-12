@@ -23,6 +23,8 @@ import java.time.ZoneId
  * [trashedRecords] 保留 [TRASH_RETENTION_DAYS] 天，期間可隨時 [restore]。
  * 逾期記錄會在 [reload] 或 [purgeExpiredTrash] 時真正從儲存區移除。
  */
+enum class AutoRecordResult { ADDED, DUPLICATE, ENRICHED, IGNORED }
+
 class RecordRepository(
     private val prefs: SharedPreferences,
 ) {
@@ -45,6 +47,7 @@ class RecordRepository(
     /** 從 SharedPreferences 重新載入，並順手清掉逾期記錄。 */
     fun reload(): List<Record> = synchronized(lock) {
         val all = readFromPrefs()
+        seedKnownReceipts(all)
         val kept = all.filterNot { it.isTrashExpired() }
 
         // 逾期記錄直接從儲存區移除，不要讓它們一直躺在 JSON 裡
@@ -86,6 +89,85 @@ class RecordRepository(
         writeToPrefs(updated)
         publish(updated)
         return true
+    }
+
+    /** 升級通知身份時沿用永久事件帳冊，內容更新或刪除帳目後也不會重記。 */
+    fun rememberAutomaticEventAlias(originalId: String, newId: String,
+                                    wasProcessed: Boolean = false): Boolean = synchronized(lock) {
+        val seen = prefs.getStringSet(KEY_SEEN_RECEIPTS, emptySet()).orEmpty().toMutableSet()
+        if (!wasProcessed && "event:$originalId" !in seen && readFromPrefs().none { it.id == originalId }) return false
+        seen.add("event:$originalId")
+        seen.add("event:$newId")
+        prefs.edit().putStringSet(KEY_SEEN_RECEIPTS, seen).apply()
+        true
+    }
+
+    /** 帳單身份與寫入在同一把鎖內處理；歷史詳情只補資料，永不建立帳目。 */
+    fun ingestAutomatic(record: Record, allowCreate: Boolean = true): AutoRecordResult = synchronized(lock) {
+        val current = readFromPrefs()
+        val receipt = receiptKey(record)
+        val event = "event:${record.id}"
+        val seen = prefs.getStringSet(KEY_SEEN_RECEIPTS, emptySet()).orEmpty().toMutableSet()
+        if (receipt != null && (receipt in seen || current.any { receiptKey(it) == receipt })) {
+            return AutoRecordResult.DUPLICATE
+        }
+        if (event in seen || current.any { it.id == record.id }) return AutoRecordResult.DUPLICATE
+
+        if (receipt != null && record.transactionTimeMillis != null) {
+            val candidates = current.filter {
+                it.transactionId == null && it.sourcePackage == record.sourcePackage &&
+                    it.amount == record.amount && it.transactionTimeMillis == record.transactionTimeMillis &&
+                    it.sourceChannel != record.sourceChannel
+            }
+            if (candidates.size > 1) return AutoRecordResult.IGNORED
+            if (candidates.size == 1) {
+                val original = candidates.single()
+                val updated = current.map {
+                    if (it.id == original.id) it.copy(transactionId = record.transactionId) else it
+                }
+                seen.add(receipt)
+                seen.add(event)
+                writeAutomatic(updated, seen)
+                return AutoRecordResult.ENRICHED
+            }
+        }
+        if (!allowCreate) return AutoRecordResult.IGNORED
+        receipt?.let { seen.add(it) }
+        seen.add(event)
+        writeAutomatic(current + normalizeCategory(record), seen)
+        AutoRecordResult.ADDED
+    }
+
+    private fun receiptKey(record: Record): String? = record.transactionId?.takeIf { it.isNotBlank() }
+        ?.let { bill -> record.sourcePackage?.let { pkg -> "receipt:$pkg:$bill" } }
+
+    /** 只精確補充既有 MPay 自動備註；不建立帳目，也不使用讀取時間猜測身份。 */
+    fun enrichAutomaticNote(evidence: Record): Boolean = synchronized(lock) {
+        if (evidence.sourcePackage != "com.macaupass.rechargeEasy" || evidence.automaticNote.isNullOrBlank()) return false
+        val current = readFromPrefs()
+        val receipt = receiptKey(evidence)
+        val byReceipt = if (receipt == null) emptyList() else current.filter { receiptKey(it) == receipt }
+        val candidates = if (byReceipt.isNotEmpty()) byReceipt else current.filter {
+            evidence.transactionTimeMillis != null && it.sourcePackage == evidence.sourcePackage &&
+                it.transactionTimeMillis == evidence.transactionTimeMillis && it.amount == evidence.amount &&
+                (evidence.transactionId == null || it.transactionId == null) && !it.isTrashed
+        }
+        val original = candidates.singleOrNull() ?: return false
+        if (original.isTrashed || original.automaticNote == null || original.note != original.automaticNote ||
+            original.amount != evidence.amount || original.sourceChannel != "notification") return false
+        if (original.note == evidence.automaticNote) return false
+        val updated = current.map {
+            if (it.id == original.id) it.copy(note = evidence.automaticNote, automaticNote = evidence.automaticNote) else it
+        }
+        writeToPrefs(updated)
+        publish(updated)
+        true
+    }
+
+    private fun writeAutomatic(records: List<Record>, seen: Set<String>) {
+        val array = JSONArray().also { a -> records.forEach { a.put(it.toJson()) } }
+        prefs.edit().putString(KEY_RECORDS, array.toString()).putStringSet(KEY_SEEN_RECEIPTS, seen).apply()
+        publish(records)
     }
 
     /**
@@ -264,13 +346,22 @@ class RecordRepository(
     }
 
     private fun writeToPrefs(records: List<Record>) {
+        // 包括永久刪除／清理前仍存在的舊版收據，升級後不能再次自動建立。
+        seedKnownReceipts(readFromPrefs())
         val array = JSONArray()
         records.forEach { array.put(it.toJson()) }
         prefs.edit().putString(KEY_RECORDS, array.toString()).apply()
     }
 
+    private fun seedKnownReceipts(records: List<Record>) {
+        val previous = prefs.getStringSet(KEY_SEEN_RECEIPTS, emptySet()).orEmpty()
+        val migrated = previous + records.mapNotNull(::receiptKey)
+        if (migrated != previous) prefs.edit().putStringSet(KEY_SEEN_RECEIPTS, migrated).apply()
+    }
+
     companion object {
         const val KEY_RECORDS: String = "records"
+        private const val KEY_SEEN_RECEIPTS = "seen_auto_identity_keys"
 
         /** 整份 records JSON 解析失敗時，原始字串的備份位置（僅保留最近一次）。 */
         const val KEY_RECORDS_BACKUP: String = "records_corrupted_backup"

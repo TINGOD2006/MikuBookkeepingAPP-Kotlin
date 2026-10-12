@@ -15,10 +15,12 @@ object PaymentScreenAnalyzer {
     private val merchantLabel = Regex("^(?:商戶全稱|商戶名稱|商戶|收款方|收款人|轉賬對象)[：:]?\\s*(.*)$")
     private val idLabel = Regex("^(?:交易單號|轉賬單號|訂單號|商戶單號)[：:]?\\s*(.*)$")
 
-    fun decide(packageName: String, text: String): AutoRecordDecision? {
-        if (packageName == "com.macaupass.rechargeEasy") return MpayScreenAnalyzer.decide(normalize(text))
-        if (packageName !in packages) return AutoRecordDecisionMaker.decide(text, requireCompletionSignal = true)
+    fun decide(packageName: String, text: String, className: String = ""): AutoRecordDecision? {
         val normalized = normalize(text)
+        if (className.contains(Regex("Detail|RecordList|BillList|Chatting|Conversation", RegexOption.IGNORE_CASE))) return null
+        if (normalized.lineSequence().any { it.trim().matches(Regex("(?:交易|轉賬|轉帳|帳單|賬單|账单|訂單|支付|付款|收款|收支)?(?:詳情|详情|記錄|记录|明細|明细)|帳單|賬單|账单")) }) return null
+        if (packageName == "com.macaupass.rechargeEasy") return MpayScreenAnalyzer.decide(normalized)
+        if (packageName !in packages) return AutoRecordDecisionMaker.decide(text, requireCompletionSignal = true)
         val lines = normalized.split('\n', '｜').map { it.trim() }.filter { it.isNotEmpty() }
         // 必須有獨立的完成節點；聊天文字或多筆帳單列表不能充當付款結果。
         val statuses = lines.filter { completion.matches(it) }
@@ -42,7 +44,7 @@ object PaymentScreenAnalyzer {
             ?.takeIf { it.isFinite() && it > 0 } ?: return null
         val income = status in setOf("收款成功", "已收款", "已存入零錢", "已到賬", "已到帳") || candidates.single().startsWith("+")
         val merchant = field(merchantLabel).orEmpty().take(80)
-        val transactionId = field(idLabel)?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{8,80}")) }
+        val transactionId = TransactionIdentity.extract(normalized)
         val note = if (merchant.isNotBlank()) {
             if (status.contains("轉")) (if (income) "收到 $merchant 轉帳" else "轉帳給 $merchant") else merchant
         } else status

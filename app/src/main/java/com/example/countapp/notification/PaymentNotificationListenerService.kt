@@ -13,14 +13,17 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.example.countapp.appContainer
 import com.example.countapp.data.Record
-import com.example.countapp.domain.AutoRecordDecisionMaker
+import com.example.countapp.data.AutoRecordResult
+import com.example.countapp.domain.TransactionTimeParser
+import com.example.countapp.domain.PaymentNotificationAnalyzer
+import com.example.countapp.domain.NotificationEventIdentity
+import com.example.countapp.domain.MpayNoteExtractor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import java.security.MessageDigest
 
 /**
  * 通知監聽服務：自動記帳的主要來源。
@@ -43,11 +46,12 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        seedExistingNotificationIdentities()
         Log.i(TAG, "✅ 通知監聽服務已連接")
         foregroundSettingsJob?.cancel()
         foregroundSettingsJob = settingsScope.launch {
             val settings = applicationContext.appContainer.settingsStore
-            combine(settings.backgroundNotificationEnabledFlow, settings.autoRecordEnabledFlow) { _, _ -> Unit }.collect {
+            combine(settings.backgroundNotificationEnabledFlow, settings.autoRecordModeFlow) { _, _ -> Unit }.collect {
                 updateForegroundState()
             }
         }
@@ -86,21 +90,20 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         val container = applicationContext.appContainer
         val settings = container.settingsStore
 
-        if (!settings.autoRecordEnabled) return
+        if (!settings.autoRecordMode.notificationsEnabled) return
 
         val packageName = sbn.packageName ?: return
         val extras = sbn.notification?.extras ?: return
 
-        val title = extras.getString(Notification.EXTRA_TITLE).orEmpty()
-        val text = extras.getString(Notification.EXTRA_TEXT).orEmpty()
-        val bigText = extras.getString(Notification.EXTRA_BIG_TEXT).orEmpty()
-        val subText = extras.getString(Notification.EXTRA_SUB_TEXT).orEmpty()
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString().orEmpty()
+        val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString().orEmpty()
 
         // 合併所有文字來源，避免漏掉內容（銀行／支付 App 常把內容放在 bigText）
-        val fullText = listOf(title, bigText, text, subText)
+        val fields = listOf(title, bigText, text, subText)
             .filter { it.isNotBlank() }
-            .joinToString(" ")
-            .trim()
+        val fullText = fields.distinct().joinToString("\n").trim()
 
         if (fullText.isEmpty()) return
 
@@ -108,45 +111,56 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         if (!settings.isPackageAllowed(packageName, applicationContext.packageName)) return
 
         // 2) 廣告過濾 + 交易句型 + 金額（共用判斷邏輯，與讀屏來源一致）
-        val decision = AutoRecordDecisionMaker.decide(fullText) ?: return
-
-        // 3) 去重（同一筆通知可能重複送達）
-        val eventId = buildEventId(packageName, decision.amount, fullText, sbn.postTime)
-        if (isAlreadyProcessed(eventId)) {
-            Log.d(TAG, "⏭️ 忽略重複通知: $eventId")
+        val decision = PaymentNotificationAnalyzer.decide(packageName, fullText) ?: run {
+            Log.i(TAG, "通知未入帳：交易格式、金額或完成狀態不符 pkg=$packageName")
             return
         }
 
-        // 4) 跨來源去重：讀屏服務可能已經先記過同一筆消費
-        //    ⚠️ 方向必須一起比對，否則「付 50」與「收 50」會被誤認為同一筆
-        if (!AutoRecordGuard.tryClaim(packageName, decision.amount, decision.isIncome)) {
-            Log.d(TAG, "⏭️ 同一筆消費已由其他來源（讀屏）記錄，略過")
+        // 3) 去重（同一筆通知可能重複送達）
+        val eventTime = sbn.notification.`when`.takeIf { it > 0 } ?: sbn.postTime
+        val eventId = NotificationEventIdentity.id(packageName, sbn.key, eventTime)
+        val legacyId = NotificationEventIdentity.legacyId(packageName, decision.amount, sbn.key,
+            fields.joinToString(" ").trim(), eventTime)
+        if (isAlreadyProcessed(eventId)) return
+        if (container.recordRepository.rememberAutomaticEventAlias(legacyId, eventId,
+                wasProcessed = isAlreadyProcessed(legacyId))) {
             markProcessed(eventId)
+            Log.d(TAG, "⏭️ 忽略重複通知: $eventId")
             return
         }
 
         // 5) 分類
         val category = com.example.countapp.domain.ClassificationRules.classifyWith(fullText, settings.effectiveRules())
 
+        val automaticNote = if (packageName == PaymentNotificationAnalyzer.MPAY_PACKAGE)
+            MpayNoteExtractor.describe(decision, fullText) ?: decision.note else decision.note
         val record = Record.create(
             amount = if (decision.isIncome) decision.amount else -decision.amount,
             category = category,
-            note = decision.note,
-            dateMillis = System.currentTimeMillis(),
+            note = automaticNote,
+            dateMillis = TransactionTimeParser.parse(fullText) ?: eventTime,
             createdAtMillis = System.currentTimeMillis(),
             id = eventId,
+            sourcePackage = packageName,
+            sourceChannel = "notification",
+            transactionId = decision.transactionId,
+            transactionTimeMillis = TransactionTimeParser.parse(fullText),
+            automaticNote = automaticNote,
         )
 
         // 6) 寫入（同一行程、同一份儲存，不需要任何回報協定）
-        val added = container.recordRepository.add(record)
+        // 排隊期間用戶可能切回手動或取消來源；寫入前再次核對。
+        if (!settings.autoRecordMode.notificationsEnabled ||
+            !settings.isPackageAllowed(packageName, applicationContext.packageName)) return
+        val result = container.recordRepository.ingestAutomatic(record)
         markProcessed(eventId)
 
-        if (!added) {
+        if (result != AutoRecordResult.ADDED) {
             Log.d(TAG, "⏭️ 記錄已存在，略過: $eventId")
             return
         }
 
-        Log.i(TAG, "✅ 已自動記帳：$category / ${decision.note} / ${decision.amount}")
+        Log.i(TAG, "通知自動記帳成功 pkg=$packageName receipt=${decision.transactionId != null}")
 
         // 7) 通知、分類確認頁、預算提醒（失敗不影響記帳）
         val needsCategory = needsCategoryPrompt(packageName)
@@ -202,16 +216,22 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         prefs.edit().putStringSet(KEY_PROCESSED_IDS, trimmed).apply()
     }
 
-    private fun buildEventId(
-        packageName: String,
-        amount: Double,
-        text: String,
-        postTime: Long,
-    ): String {
-        val normalized = text.trim().replace(Regex("\\s+"), " ").lowercase()
-        val source = "$packageName|${String.format(java.util.Locale.US, "%.2f", amount)}|$postTime|$normalized"
-        val digest = MessageDigest.getInstance("SHA-256").digest(source.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
+    /** 僅首次升級時登記已在通知欄的舊通知；不補記安裝前的交易。 */
+    private fun seedExistingNotificationIdentities() {
+        val prefs = getSharedPreferences(com.example.countapp.AppContainer.PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_IDENTITY_V2_READY, false)) return
+        // 系統權限已連接；不讀正文，只登記 Android 的通知身份及時間。
+        runCatching {
+            val settings = applicationContext.appContainer.settingsStore
+            activeNotifications.orEmpty().filter { settings.isPackageAllowed(it.packageName, packageName) }
+                .forEach {
+                    val time = it.notification.`when`.takeIf { value -> value > 0 } ?: it.postTime
+                    val id = NotificationEventIdentity.id(it.packageName, it.key, time)
+                    applicationContext.appContainer.recordRepository.rememberAutomaticEventAlias(id, id, wasProcessed = true)
+                    markProcessed(id)
+                }
+            prefs.edit().putBoolean(KEY_IDENTITY_V2_READY, true).apply()
+        }.onFailure { Log.w(TAG, "舊通知身份登記未完成：${it.javaClass.simpleName}") }
     }
 
     // ============================================================
@@ -264,6 +284,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         private const val TAG = "PaymentListener"
 
         private const val KEY_PROCESSED_IDS = "processed_notification_ids"
+        private const val KEY_IDENTITY_V2_READY = "notification_identity_v2_ready"
         private const val MAX_PROCESSED_IDS = 1000
         private const val DEDUPE_WINDOW_MS = 300_000L
         private const val FOREGROUND_NOTIFICATION_ID = 1001

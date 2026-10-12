@@ -4,6 +4,8 @@ import android.content.SharedPreferences
 import com.example.countapp.domain.AmountFormatter
 import org.json.JSONObject
 import java.time.YearMonth
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 每月預算儲存庫。
@@ -17,12 +19,68 @@ import java.time.YearMonth
 class BudgetRepository(
     private val prefs: SharedPreferences,
 ) {
+    private val changes = MutableStateFlow(0)
+    val revision = changes.asStateFlow()
+    private fun changed() { changes.value += 1 }
+    private fun lockKey(category: String?) = category?.let { "category:$it" } ?: "total"
+    private fun readLocks(): JSONObject = runCatching {
+        JSONObject(prefs.getString(KEY_LOCKS, "{}").orEmpty())
+    }.getOrDefault(JSONObject())
+    private fun lockedAmount(month: YearMonth, category: String?): Double? {
+        val value = readLocks().optJSONObject(lockKey(category)) ?: return null
+        val from = runCatching { YearMonth.parse(value.getString("from")) }.getOrNull() ?: return null
+        return value.optDouble("amount").takeIf { month >= from && it.isFinite() && it > 0 }
+    }
+    fun isLocked(month: YearMonth, category: String? = null): Boolean = lockedAmount(month, category) != null
 
+    @Synchronized
+    fun lock(month: YearMonth, category: String? = null, nowMonth: YearMonth = YearMonth.now()): Boolean {
+        if (month < nowMonth || isLocked(month, category)) return false
+        val amount = if (category == null) load(month) else loadCategoryBudget(month, category)
+        if (amount == null || !amount.isFinite() || amount <= 0) return false
+        val locks = readLocks()
+        // A scheduled lock must not be overwritten from an earlier month.
+        if (locks.has(lockKey(category))) return false
+        locks.put(lockKey(category), JSONObject().put("from", month.toString()).put("amount", amount))
+        prefs.edit().putString(KEY_LOCKS, locks.toString()).apply()
+        changed()
+        return true
+    }
+
+    /** 解鎖時保留已經生效月份的金額，未來月份重新使用各月自己的設定。 */
+    @Synchronized
+    fun unlock(category: String? = null, nowMonth: YearMonth = YearMonth.now()): Boolean {
+        val locks = readLocks()
+        val value = locks.optJSONObject(lockKey(category)) ?: return false
+        val from = runCatching { YearMonth.parse(value.getString("from")) }.getOrNull() ?: return false
+        val amount = value.optDouble("amount")
+        val editor = prefs.edit()
+        val categories = readCategoryBudgets()
+        var month = from
+        while (month <= nowMonth) {
+            if (category == null) editor.putFloat(key(month.year, month.monthValue), amount.toFloat())
+            else {
+                val k = categoryMonthKey(month)
+                val values = categories.optJSONObject(k) ?: JSONObject()
+                categories.put(k, values.put(category, amount))
+            }
+            month = month.plusMonths(1)
+        }
+        locks.remove(lockKey(category))
+        editor.putString(KEY_LOCKS, locks.toString()).putString(KEY_CATEGORY_BUDGETS, categories.toString()).apply()
+        changed()
+        return true
+    }
+
+    @Synchronized
     fun save(year: Int, month: Int, amount: Double) {
+        if (isLocked(YearMonth.of(year, month))) return
         prefs.edit().putFloat(key(year, month), amount.toFloat()).apply()
+        changed()
     }
 
     fun load(year: Int, month: Int): Double? {
+        lockedAmount(YearMonth.of(year, month), null)?.let { return it }
         val k = key(year, month)
         if (!prefs.contains(k)) return null
         // 舊版 Flutter 存的是 Double；原生端一开始用 Float。
@@ -39,8 +97,11 @@ class BudgetRepository(
     fun save(month: YearMonth, amount: Double) =
         save(month.year, month.monthValue, amount)
 
+    @Synchronized
     fun clear(year: Int, month: Int) {
+        if (isLocked(YearMonth.of(year, month))) return
         prefs.edit().remove(key(year, month)).apply()
+        changed()
     }
 
     /** 所有已設定預算的月份。 */
@@ -60,7 +121,7 @@ class BudgetRepository(
     fun loadCategoryBudgets(month: YearMonth): Map<String, Double> {
         val forMonth = readCategoryBudgets()
             .optJSONObject(categoryMonthKey(month))
-            ?: return emptyMap()
+            ?: JSONObject()
 
         val result = linkedMapOf<String, Double>()
         // 依 JSON 內的順序回傳，讓預算頁的清單順序穩定
@@ -68,6 +129,12 @@ class BudgetRepository(
             val amount = forMonth.optDouble(name, Double.NaN)
             // 0 或負數算不出使用率，一律視為未設定（不顯示進度）
             if (amount.isFinite() && amount > 0) result[name] = amount
+        }
+        readLocks().keys().forEach { k ->
+            if (k.startsWith("category:")) {
+                val name = k.removePrefix("category:")
+                lockedAmount(month, name)?.let { result[name] = it }
+            }
         }
         return result
     }
@@ -82,9 +149,10 @@ class BudgetRepository(
      * 金額不是有限正數時直接視為「清除」，避免留下一筆永遠算不出使用率的預算。
      * 分類名稱空白時不寫入。
      */
+    @Synchronized
     fun saveCategoryBudget(month: YearMonth, category: String, amount: Double) {
         val name = category.trim()
-        if (name.isEmpty()) return
+        if (name.isEmpty() || isLocked(month, name)) return
         if (!amount.isFinite() || amount <= 0) {
             clearCategoryBudget(month, name)
             return
@@ -99,8 +167,10 @@ class BudgetRepository(
     }
 
     /** 清除某分類的每月預算（只影響該分類，其他分類與整月預算都不動）。 */
+    @Synchronized
     fun clearCategoryBudget(month: YearMonth, category: String) {
         val name = category.trim()
+        if (isLocked(month, name)) return
         val key = categoryMonthKey(month)
         val root = readCategoryBudgets()
         val forMonth = root.optJSONObject(key) ?: return
@@ -122,10 +192,11 @@ class BudgetRepository(
     fun canRenameCategory(oldName: String, newName: String): Boolean {
         if (oldName == newName) return true
         val root = readCategoryBudgets()
-        return root.keys().asSequence().none { root.optJSONObject(it)?.has(newName) == true }
+        return !readLocks().has(lockKey(newName)) && root.keys().asSequence().none { root.optJSONObject(it)?.has(newName) == true }
     }
 
     /** 分類名稱變更涵蓋所有月份，目標仍有歷史預算時不修改任何資料。 */
+    @Synchronized
     fun renameCategory(oldName: String, newName: String) {
         if (oldName == newName) return
         if (!canRenameCategory(oldName, newName)) return
@@ -137,7 +208,13 @@ class BudgetRepository(
                 values.remove(oldName)
             }
         }
-        writeCategoryBudgets(root)
+        val locks = readLocks()
+        locks.optJSONObject(lockKey(oldName))?.let {
+            locks.put(lockKey(newName), it)
+            locks.remove(lockKey(oldName))
+        }
+        prefs.edit().putString(KEY_CATEGORY_BUDGETS, root.toString()).putString(KEY_LOCKS, locks.toString()).apply()
+        changed()
     }
 
     private fun readCategoryBudgets(): JSONObject {
@@ -157,10 +234,12 @@ class BudgetRepository(
 
     private fun writeCategoryBudgets(root: JSONObject) {
         prefs.edit().putString(KEY_CATEGORY_BUDGETS, root.toString()).apply()
+        changed()
     }
 
     companion object {
         const val PREFIX: String = "budget_"
+        private const val KEY_LOCKS = "locked_budgets"
 
         /**
          * 各分類預算的儲存鍵：一份 JSON，例如

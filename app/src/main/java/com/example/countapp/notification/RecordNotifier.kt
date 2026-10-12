@@ -82,7 +82,7 @@ class RecordNotifier(private val context: Context) {
         notify(
             id = record.id.hashCode(),
             channel = CHANNEL_RECORDS,
-            title = "已自動記錄，點一下選分類",
+            title = "已自動記錄，點一下查看詳情",
             text = "${if (note.isEmpty()) record.category else note}  $sign$amount",
             promptRecordId = record.id,
         )
@@ -125,7 +125,7 @@ class RecordNotifier(private val context: Context) {
     ) {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            // 要求 App 開啟後直接跳到「選分類／寫備註」頁
+            // 要求 App 開啟後直接跳到「記錄詳情」頁
             promptRecordId?.let { putExtra(EXTRA_PROMPT_RECORD_ID, it) }
         }
         val pending = PendingIntent.getActivity(

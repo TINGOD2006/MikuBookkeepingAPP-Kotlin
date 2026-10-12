@@ -95,7 +95,7 @@ private val SwipeFlingThreshold: Dp = 320.dp
  * 下面是依日期分組的記錄清單，**日期由大到小、由上往下排**（30 號在最上面）。
  *
  * 操作：
- *   - **點一下**記錄 → 開編輯畫面
+ *   - **點一下**記錄 → 查看詳情；左滑後按編輯才修改
  *   - **左滑**記錄 → 停在開啟位置，右側露出【紅色刪除】與【藍色編輯】兩個方塊
  *   - 放大鏡 → 切到獨立的「尋找」頁（[SearchScreen]）
  *
@@ -107,6 +107,7 @@ fun BookkeepingScreen(
     selectedMonth: YearMonth,
     onMonthChange: (YearMonth) -> Unit,
     onEditRecord: (Record) -> Unit,
+    onViewRecord: (Record) -> Unit,
     onOpenSearch: () -> Unit,
 ) {
     val allRecords by container.recordRepository.records.collectAsState()
@@ -173,7 +174,7 @@ fun BookkeepingScreen(
             if (monthRecords.isEmpty()) {
                 EmptyState(
                     message = "${selectedMonth.year}年${selectedMonth.monthValue}月 尚無記錄",
-                    hint = "點擊下方 ＋ 按鈕新增記錄；點一下帳目可編輯，左滑可刪除",
+                    hint = "點擊下方 ＋ 新增；點帳目查看詳情，左滑可編輯或刪除",
                 )
             } else {
                 LazyColumn(
@@ -204,6 +205,7 @@ fun BookkeepingScreen(
                                     openRecordId = if (revealed) record.id else null
                                 },
                                 onEdit = { onEditRecord(record) },
+                                onView = { onViewRecord(record) },
                                 onDelete = {
                                     val moved = moveToTrash(record)
                                     // 刪掉的那列不該留在「開啟中」的清單狀態裡
@@ -492,13 +494,15 @@ private fun DateHeader(date: LocalDate, expense: Double, income: Double, total: 
  * 沒辦法停在中間只露出兩個方塊。
  */
 @Composable
-private fun SwipeActionRecord(
+internal fun SwipeActionRecord(
     record: Record,
     category: CategoryItem?,
     revealed: Boolean,
     onRevealChange: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Boolean,
+    onView: () -> Unit,
+    showDate: Boolean = false,
 ) {
     val density = LocalDensity.current
     val revealPx = with(density) { SwipeActionRevealWidth.toPx() }
@@ -568,13 +572,14 @@ private fun SwipeActionRecord(
         RecordCard(
             record = record,
             category = category,
+            showDate = showDate,
             onClick = {
                 if (offsetPx < 0f) {
                     // 已經打開 → 點一下收回
                     onRevealChange(false)
                     scope.launch { settleTo(0f) }
                 } else {
-                    onEdit()
+                    onView()
                 }
             },
             modifier = Modifier

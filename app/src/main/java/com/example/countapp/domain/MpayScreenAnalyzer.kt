@@ -5,14 +5,27 @@ internal object MpayScreenAnalyzer {
     private val complete = setOf("支付成功", "付款成功", "交易成功", "成功交易", "轉賬成功", "轉帳成功", "收款成功", "轉入成功", "轉出成功", "已到賬", "已到帳")
     private val incomeStatuses = setOf("收款成功", "轉入成功", "已到賬", "已到帳")
     private val expenseStatuses = setOf("支付成功", "付款成功", "轉賬成功", "轉帳成功", "轉出成功")
+    // Samsung 實機的轉帳完成頁；輸入頁是「向…轉賬」，不含「您已」。
+    private val outgoingHeader = Regex("^您已向\\s*(.+?)\\s*轉(?:賬|帳)$")
     private val blocked = Regex("失敗|失败|已取消|待付款|待支付|待確認|轉賬請求|轉帳請求|成功轉賬後無法撤回")
     private val money = Regex("^([+-]?)\\s*(?:MOP\\s*\\$?|澳門幣|HK\\$|\\$)?\\s*((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?)$", RegexOption.IGNORE_CASE)
     private val amountLabel = Regex("^(?:交易金額|付款金額|支付金額|實付金額|轉賬金額|轉帳金額|收款金額|金額)[：:]?\\s*(.*)$")
 
     fun decide(text: String): AutoRecordDecision? {
+        if (isHistory(text)) return null
+        return receipt(text)
+    }
+
+    fun isHistory(text: String): Boolean = text.lineSequence().map(String::trim).any {
+        it.matches(Regex(".*(?:詳情|详情|明細|明细|交易記錄|交易记录|轉賬記錄|转账记录|帳單|賬單|账单).*")) &&
+            !it.startsWith("點擊") && !it.startsWith("点击") && !it.startsWith("查看詳情")
+    }
+
+    /** 收據解析供補充既有帳目資料使用；能解析並不代表允許新增。 */
+    fun receipt(text: String, header: String? = null): AutoRecordDecision? {
         val lines = text.split('\n', '｜').map(String::trim).filter(String::isNotEmpty)
         if (blocked.containsMatchIn(text) || lines.any { it in setOf("下一步", "確認轉賬", "確認轉帳", "確認付款", "請輸入金額", "輸入金額", "輸入密碼", "退款成功", "交易記錄", "轉賬記錄") }) return null
-        val statuses = lines.filter { it in complete }
+        val statuses = lines.filter { it in complete || outgoingHeader.matches(it) }
         // 有些付款收據同時有頁面標題「支付成功」與「成功交易」；其他多筆狀態一律拒絕。
         if (statuses.size != 1 && !(statuses.size == 2 && statuses.toSet() == setOf("支付成功", "成功交易"))) return null
         val status = statuses.firstOrNull { it in expenseStatuses || it in incomeStatuses } ?: statuses.first()
@@ -46,7 +59,7 @@ internal object MpayScreenAnalyzer {
         val kind = field(setOf("交易類型", "收支類型"))
         val direction = when {
             status in incomeStatuses -> true
-            status in expenseStatuses -> false
+            status in expenseStatuses || outgoingHeader.matches(status) -> false
             match.groupValues[1] == "+" -> true
             match.groupValues[1] == "-" -> false
             kind in setOf("收入", "收款", "轉入", "收到轉賬") -> true
@@ -54,8 +67,12 @@ internal object MpayScreenAnalyzer {
             field(setOf("付款方式")) != null -> false
             else -> return null // 只有「交易成功」不能推斷轉帳方向。
         }
-        val merchant = field(setOf("商戶名稱", "商戶", "收款方", "收款人", "付款方", "付款人")).orEmpty().take(80)
-        val id = field(setOf("交易編號", "交易單號", "商戶訂單號"))?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{8,80}")) }
+        val merchant = (outgoingHeader.matchEntire(status)?.groupValues?.get(1)
+            ?: field(setOf("商戶名稱", "商戶", "收款方", "收款人", "付款方", "付款人"))
+            ?: lines.firstNotNullOfOrNull { Regex("^轉給[\\s\\u00a0]+(.+)$").matchEntire(it)?.groupValues?.get(1) }
+            ?: header?.trim()?.replace(Regex("^(?:來自|收到|轉自|轉給)\\s*"), ""))
+            .orEmpty().take(80)
+        val id = TransactionIdentity.extract(text)
         return AutoRecordDecision(amount, direction, merchant, merchant.ifBlank { status },
             AutoRecordDecisionMaker.fingerprint(id ?: "$status|$amount|$direction|$merchant"), id)
     }

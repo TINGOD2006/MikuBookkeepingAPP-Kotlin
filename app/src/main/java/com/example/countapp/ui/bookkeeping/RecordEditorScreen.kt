@@ -210,7 +210,7 @@ private fun RecordEditorContent(
                         .clickableNoRipple {
                             selectedType = type
                             selectedCategory = null
-                            amountInput = "0"
+                            if (!isEditing) amountInput = "0"
                         },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -251,6 +251,7 @@ private fun RecordEditorContent(
             note = note,
             date = date,
             isEditing = isEditing,
+            allowClearNote = editing?.sourcePackage == "com.macaupass.rechargeEasy",
             onKey = { key -> amountInput = applyAmountKey(amountInput, key) },
             onNoteChange = { note = it },
             onPickDate = { showDatePicker = true },
@@ -269,7 +270,8 @@ private fun RecordEditorContent(
                 }
 
                 val signed = if (selectedType == CategoryCatalog.TYPE_EXPENSE) -amount else amount
-                val millis = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                val millis = if (editing != null && date == editing.localDate()) editing.dateMillis
+                    else date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
                 if (editing == null) {
                     val record = Record.create(

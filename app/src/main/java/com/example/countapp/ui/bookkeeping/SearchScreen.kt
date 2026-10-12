@@ -59,19 +59,21 @@ private const val RECENT_PREVIEW_COUNT = 20
  * 尋找頁（獨立頁面）。
  *
  * 明細頁上方 bar 的放大鏡會切到這一頁：這裡**不分月份**搜尋使用者的全部記錄
- * （分類、備註、金額、日期都可比對），點結果直接開編輯畫面。
+ * （分類、備註、金額、日期都可比對），點結果查看詳情，左滑後可編輯。
  */
 @Composable
 fun SearchScreen(
     container: AppContainer,
     onDismiss: () -> Unit,
     onEditRecord: (Record) -> Unit,
+    onViewRecord: (Record) -> Unit,
 ) {
     val allRecords by container.recordRepository.records.collectAsState()
     val categoryRevision by container.categoryStore.revision.collectAsState()
     val categoryLookup = remember(categoryRevision) { container.categoryStore.recordCategoryLookup() }
 
     var query by remember { mutableStateOf("") }
+    var revealedId by remember { mutableStateOf<String?>(null) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -208,11 +210,15 @@ fun SearchScreen(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
             ) {
                 items(shown, key = { it.id }) { record ->
-                    RecordCard(
+                    SwipeActionRecord(
                         record = record,
                         category = categoryLookup[record.isExpense to record.category],
                         showDate = true,
-                        onClick = { onEditRecord(record) },
+                        revealed = revealedId == record.id,
+                        onRevealChange = { revealedId = if (it) record.id else null },
+                        onEdit = { keyboard?.hide(); onEditRecord(record) },
+                        onView = { keyboard?.hide(); onViewRecord(record) },
+                        onDelete = { container.recordRepository.moveToTrash(record.id) },
                     )
                 }
             }

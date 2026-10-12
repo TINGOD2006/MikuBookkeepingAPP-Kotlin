@@ -22,16 +22,20 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.countapp.notification.PaymentAccessibilityService
 import com.example.countapp.notification.PaymentNotificationListenerService
 import com.example.countapp.ui.theme.MikuColors
+import com.example.countapp.data.SettingsStore
+import androidx.compose.runtime.collectAsState
 
 /** 設定可先選好；從系統授權頁返回時重新核對實際權限。 */
 @Composable
-internal fun AutoRecordPermissions() {
+internal fun AutoRecordPermissions(settings: SettingsStore) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var notifications by remember { mutableStateOf(PaymentNotificationListenerService.isNotificationAccessGranted(context)) }
     var accessibility by remember { mutableStateOf(PaymentAccessibilityService.isEnabled(context)) }
     val power = remember(context) { context.getSystemService(PowerManager::class.java) }
     var batteryExempt by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
+    val mode by settings.autoRecordModeFlow.collectAsState()
+    val ballEnabled by settings.floatingBallEnabledFlow.collectAsState()
     DisposableEffect(lifecycle, context) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -45,19 +49,20 @@ internal fun AutoRecordPermissions() {
     }
     Column {
         Text(
-            if (notifications || accessibility) {
-                "通知來源：${if (notifications) "已授權" else "未授權"} · 讀屏來源：${if (accessibility) "已啟用" else "未啟用"}"
-            } else "設定已保留；啟用通知使用權限或無障礙服務後，才可接收交易來源。",
+            "通知記錄：${if (!mode.notificationsEnabled) "已停用" else if (notifications) "已授權" else "待授權，尚不能記錄"} · " +
+                "畫面讀取：${if (!mode.accessibilityEnabled) "已停用" else if (accessibility) "已授權" else "待授權"}",
             color = MikuColors.TextSecondary, fontSize = 11.sp,
         )
         Row {
-            if (!notifications) TextButton(onClick = { PaymentNotificationListenerService.openNotificationAccessSettings(context) }) {
+            if (mode.notificationsEnabled && !notifications) TextButton(onClick = { PaymentNotificationListenerService.openNotificationAccessSettings(context) }) {
                 Text("通知使用權限", fontSize = 12.sp)
             }
-            if (!accessibility) TextButton(onClick = { PaymentAccessibilityService.openSettings(context) }) {
-                Text("無障礙服務", fontSize = 12.sp)
+            if (!accessibility && (mode.accessibilityEnabled || ballEnabled)) TextButton(onClick = { PaymentAccessibilityService.openSettings(context) }) {
+                Text(if (mode.accessibilityEnabled) "無障礙服務" else "浮球所需無障礙權限", fontSize = 12.sp)
             }
         }
+        if (mode.notificationsEnabled) Text("請同時允許 MPay 發送交易通知；系統通知使用權限與 MPay 的通知開關都需要開啟。",
+            color = MikuColors.TextSecondary, fontSize = 11.sp)
         Text("電池最佳化：${if (batteryExempt) "已豁免" else "系統預設"}。若背景記錄中斷，請在 App 資訊允許背景電池使用。",
             color = MikuColors.TextSecondary, fontSize = 11.sp)
         TextButton(onClick = {

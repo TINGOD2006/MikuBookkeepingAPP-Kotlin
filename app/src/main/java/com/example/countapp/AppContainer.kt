@@ -66,7 +66,7 @@ class AppContainer(context: Context) {
      * 自動記錄後「等待使用者補分類／備註」的記錄佇列（目前是 MPay）。
      *
      * 由通知監聽或無障礙讀屏服務加入，UI 觀察到之後浮出圓球（見 `ui/MikuApp.kt`
-     * 的 `AutoRecordBall`），使用者點了才開編輯頁；
+     * 的 `AutoRecordBall`），使用者點了才開詳情頁；
      * 使用者關閉頁面就代表「保留自動分類」，所以從佇列移除即可。
      *
      * ⚠️ 用佇列而不是單一值：MPay 常常「通知」與「讀屏」幾乎同時各記一筆，
@@ -88,7 +88,7 @@ class AppContainer(context: Context) {
      * 「請直接開啟確認頁」的一次性訊號。
      *
      * App 內的自動記錄只會浮出圓球（不打斷操作），但**通知**被點擊時使用者
-     * 已經明確表達要看那一筆，這時就該直接開編輯頁（跟舊行為一致）。
+     * 已經明確表達要看那一筆，這時就該直接開詳情頁（跟舊行為一致）。
      * UI 讀到 true 並開啟畫面後呼叫 [consumeAutoRecordPromptOpenRequest] 歸零。
      */
     private val _autoRecordPromptOpenRequest = MutableStateFlow(false)
@@ -97,17 +97,17 @@ class AppContainer(context: Context) {
         _autoRecordPromptOpenRequest.asStateFlow()
 
     /**
-     * 請 UI 跳出「選分類／寫備註」的圓球（同一筆只排一次）。
+     * 請 UI 跳出「記錄詳情」的圓球（同一筆只排一次）。
      *
-     * @param openEditor 通知被點擊時傳 true → UI 直接開啟編輯頁，不必再點一次圓球。
+     * @param openDetails 通知被點擊時傳 true → UI 直接開啟編輯頁，不必再點一次圓球。
      */
-    fun requestAutoRecordPrompt(record: Record, openEditor: Boolean = false) {
+    fun requestAutoRecordPrompt(record: Record, openDetails: Boolean = false) {
         updatePrompts { pending ->
             val others = pending.filterNot { it.id == record.id }
-            if (openEditor) (listOf(record) + others).take(MAX_PENDING_PROMPTS)
+            if (openDetails) (listOf(record) + others).take(MAX_PENDING_PROMPTS)
             else (others + record).takeLast(MAX_PENDING_PROMPTS)
         }
-        if (openEditor) _autoRecordPromptOpenRequest.value = true
+        if (openDetails) _autoRecordPromptOpenRequest.value = true
     }
 
     /** UI 已開啟（或決定不開）確認頁，把一次性訊號歸零。 */

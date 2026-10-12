@@ -11,6 +11,12 @@ import com.example.countapp.AppContainer
 import com.example.countapp.appContainer
 import com.example.countapp.data.AccessibilityProbeLog
 import com.example.countapp.data.Record
+import com.example.countapp.data.AutoRecordResult
+import com.example.countapp.domain.AutoRecordDecision
+import com.example.countapp.domain.MpayCaptureGate
+import com.example.countapp.domain.MpayScreenAnalyzer
+import com.example.countapp.domain.MpayNoteExtractor
+import com.example.countapp.domain.PaymentWindowContext
 import com.example.countapp.domain.PaymentTextAnalyzer
 import com.example.countapp.domain.PaymentScreenAnalyzer
 import com.example.countapp.domain.ClassificationRules
@@ -46,14 +52,14 @@ class PaymentAccessibilityService : AccessibilityService() {
     private class NodeDump {
         var nodeCount = 0
         val texts = mutableListOf<String>()
+        val viewIds = mutableSetOf<String>()
+        var mpayHeader: String? = null
     }
+    private val mpayGate = MpayCaptureGate()
+    private val windowContext = PaymentWindowContext()
 
     /** 上一次 dump 的簽章，避免同一個畫面被反覆記錄。 */
     private var lastSignature: String? = null
-
-    /** 上一次「已寫入記錄」的畫面文字與時間（同畫面事件風暴的快速去重）。 */
-    private var lastRecordedText: String? = null
-    private var lastRecordedAt: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -62,6 +68,13 @@ class PaymentAccessibilityService : AccessibilityService() {
         overlay = AutoRecordOverlay(this)
         val container = applicationContext.appContainer
         connectionJob = serviceScope.launch(Dispatchers.Main.immediate) {
+            launch {
+                container.settingsStore.autoRecordModeFlow.collect {
+                    mpayGate.reset()
+                    windowContext.clear()
+                    lastSignature = null
+                }
+            }
             launch {
                 container.settingsStore.allowedPackagesFlow.collect { packages ->
                     // 空陣列可能被系統視為「所有 App」，改用未安裝的佔位包名阻擋事件。
@@ -93,6 +106,7 @@ class PaymentAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
+        mpayGate.reset()
         overlay?.hide()
         Log.w(TAG, "⚠️ 無障礙自動記帳被中斷")
     }
@@ -108,6 +122,8 @@ class PaymentAccessibilityService : AccessibilityService() {
 
         val packageName = event.packageName?.toString() ?: return
         if (packageName == applicationContext.packageName) return
+        // 通知層可保留系統服務供浮球使用，但不走訪任何支付畫面文字。
+        if (!applicationContext.appContainer.settingsStore.autoRecordMode.accessibilityEnabled) return
         if (!applicationContext.appContainer.settingsStore.isPackageAllowed(packageName, applicationContext.packageName)) return
 
         val root = rootInActiveWindow ?: event.source ?: return
@@ -115,6 +131,8 @@ class PaymentAccessibilityService : AccessibilityService() {
         // event 與節點在回調後可能被系統回收，只把不可變快照交給背景工作。
         val eventClass = event.className?.toString().orEmpty()
         val eventType = event.eventType
+        val activityClass = windowContext.observe(packageName, eventClass,
+            eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
 
         // ⚠️ 節點樹走訪必須留在主執行緒（AccessibilityNodeInfo 生命週期很短），
         //    但後續的判定、AI 分類（會做網路 I/O）、寫入都要丟到背景，
@@ -128,6 +146,13 @@ class PaymentAccessibilityService : AccessibilityService() {
         val signature = "$packageName|${event.eventType}|$joined"
         val isNewScreen = signature != lastSignature
         if (isNewScreen) lastSignature = signature
+        val enabled = applicationContext.appContainer.settingsStore.autoRecordMode.accessibilityEnabled
+        val isMpay = packageName == "com.macaupass.rechargeEasy"
+        if (!enabled) mpayGate.reset()
+        val decision = if (isMpay && enabled) mpayGate.evaluate(joined,
+            activityClass, dump.viewIds.toSet(), System.currentTimeMillis())
+            else if (isMpay) null else PaymentScreenAnalyzer.decide(packageName, joined, activityClass)
+        val receipt = if (isMpay) MpayScreenAnalyzer.receipt(joined, dump.mpayHeader) else null
 
         serviceScope.launch {
             try {
@@ -135,7 +160,7 @@ class PaymentAccessibilityService : AccessibilityService() {
                 // 這樣「我的 → 無障礙自動記錄」看到的字才不會與事實不符
                 // （例如自動記錄關閉時卻顯示「已自動記帳」）。
                 // 同一個畫面的事件可能連續好幾個同時進來，寫入端要序列化。
-                val outcome = synchronized(recordLock) { tryAutoRecord(packageName, joined) }
+                val outcome = synchronized(recordLock) { tryAutoRecord(packageName, joined, decision, receipt) }
 
                 // 重記保護照常執行，診斷列表只顯示新的判斷，不以重複略過訊息洗版。
                 if (isNewScreen && outcome?.startsWith("略過：") != true) {
@@ -163,13 +188,14 @@ class PaymentAccessibilityService : AccessibilityService() {
      * @return null 表示「這個畫面不符合任何自動記帳條件」；
      *         非 null 是一句給診斷紀錄用的結果說明（成功或略過的原因）
      */
-    private fun tryAutoRecord(packageName: String, text: String): String? {
+    private fun tryAutoRecord(packageName: String, text: String, fresh: AutoRecordDecision?, receipt: AutoRecordDecision?): String? {
         val container = applicationContext.appContainer
         val settings = container.settingsStore
 
         // 只接受「已完成」的付款畫面：金額 + 成功字樣（避免記到輸入中的頁面）
-        val decision = PaymentScreenAnalyzer.decide(packageName, text)
+        val decision = receipt ?: fresh
             ?: return null
+        val allowCreate = fresh != null && settings.autoRecordMode.canCreateFromScreen(packageName)
 
         val direction = if (decision.isIncome) "+" else "-"
 
@@ -186,34 +212,17 @@ class PaymentAccessibilityService : AccessibilityService() {
             "・${formatTimeText(dateMillis)}"
 
         // 主開關 + 包名白名單（與通知來源相同的規則）
-        if (!settings.autoRecordEnabled) return "符合條件但未記錄：自動記錄已關閉（$summary）"
+        if (!settings.autoRecordMode.accessibilityEnabled) return "未記錄：目前未選用無障礙讀取"
         if (!settings.isPackageAllowed(packageName, applicationContext.packageName)) {
             return "符合條件但未記錄：$packageName 不在白名單（$summary）"
         }
 
-        val prefs = applicationContext.getSharedPreferences(AppContainer.PREFS_NAME, Context.MODE_PRIVATE)
-
-        // 同一個畫面的事件風暴（內容變更可能連續送達數十次）先快速擋掉
-        if (text == lastRecordedText && now - lastRecordedAt < REPEAT_WINDOW_MS) {
-            return "略過：同一個畫面剛記過（$summary）"
-        }
-
-        // 同一個畫面文字的重記保護（寫進 prefs，服務被系統重啟也有效）
-        if (AutoRecordGuard.isScreenRecorded(prefs, packageName, decision.fingerprint, now)) {
-            return "略過：這個畫面已記錄過（$summary）"
-        }
-
-        // 跨來源去重：付款通知可能已經先記過同一筆消費
-        // ⚠️ 方向要一起比對，否則「付 50」與「收 50」會被誤認為同一筆
-        if (!AutoRecordGuard.tryClaim(packageName, decision.amount, decision.isIncome, now)) {
-            return "略過：同一筆消費已由其他來源（通知）記錄（$summary）"
-        }
-
         val category = ClassificationRules.classifyWith(text, settings.effectiveRules())
+        val extractedNote = if (packageName == "com.macaupass.rechargeEasy") MpayNoteExtractor.describe(decision, text) else null
         val record = Record.create(
             amount = if (decision.isIncome) decision.amount else -decision.amount,
             category = category,
-            note = decision.note,
+            note = extractedNote ?: decision.note,
             // 交易日期（見上方說明）；createdAt 才是「我們何時寫入」，
             // 兩者刻意分開，重複讀到時才看得出是同一筆。
             dateMillis = dateMillis,
@@ -221,16 +230,25 @@ class PaymentAccessibilityService : AccessibilityService() {
             // id 不含「讀到的當下」：同一筆交易不管被讀幾次都是同一個 id，
             // 儲存庫的 id 去重就能永久擋掉重複（連服務重啟也有效）
             id = AutoRecordGuard.screenRecordId(packageName, decision, dateMillis),
+            sourcePackage = packageName,
+            sourceChannel = "accessibility",
+            transactionId = decision.transactionId,
+            transactionTimeMillis = screenTime,
+            automaticNote = extractedNote,
         )
 
-        val added = container.recordRepository.add(record)
-        lastRecordedText = text
-        lastRecordedAt = now
-        AutoRecordGuard.rememberScreen(prefs, packageName, decision.fingerprint, now)
+        val noteEnriched = container.recordRepository.enrichAutomaticNote(record)
 
-        if (!added) return "略過：同一筆交易已記錄過（$summary）"
+        when (container.recordRepository.ingestAutomatic(record, allowCreate)) {
+            AutoRecordResult.DUPLICATE -> return if (noteEnriched) "已補充既有帳目的交易備註" else "略過：同一帳單已記錄過"
+            AutoRecordResult.ENRICHED -> return "已補充既有記錄的帳單編號，未新增帳目"
+            AutoRecordResult.IGNORED -> return if (noteEnriched) "已補充既有帳目的交易備註" else if (packageName == "com.macaupass.rechargeEasy")
+                "MPay 由通知入帳；此畫面只補充可精確核對的資料，未新增帳目"
+                else "未新增：此畫面不屬於新交易結果"
+            AutoRecordResult.ADDED -> Unit
+        }
 
-        Log.i(TAG, "✅ 讀屏自動記帳：$category / ${decision.note} / ${decision.amount} / $dateMillis")
+        Log.i(TAG, "讀屏自動記帳成功")
 
         // 通知、分類確認頁、預算提醒（失敗不影響記帳）
         if (needsCategoryPrompt(packageName)) {
@@ -269,9 +287,12 @@ class PaymentAccessibilityService : AccessibilityService() {
         if (depth > MAX_DEPTH || dump.nodeCount >= MAX_NODES) return
 
         dump.nodeCount++
+        if (!node.isVisibleToUser) return
+        node.viewIdResourceName?.let { dump.viewIds.add(it) }
 
         val text = node.text?.toString()?.trim()
         if (!text.isNullOrEmpty()) dump.texts.add(text)
+        if (node.viewIdResourceName == "com.macaupass.rechargeEasy:id/tv_head_title") dump.mpayHeader = text
 
         // contentDescription 也要收：很多自繪元件把文字放在這裡
         val description = node.contentDescription?.toString()?.trim()
@@ -377,9 +398,6 @@ class PaymentAccessibilityService : AccessibilityService() {
         private const val MAX_NODES = 1500
         private const val MAX_DEPTH = 40
         private const val MAX_TEXT_LENGTH = 4000
-
-        /** 同一個畫面文字的重記時間窗（比對跨來源去重更長，避免同一頁反覆記錄）。 */
-        private const val REPEAT_WINDOW_MS = 600_000L
 
         /** 診斷紀錄裡「這筆記錄採用的日期時間」格式。 */
         private val SUMMARY_TIME_FORMAT: DateTimeFormatter =

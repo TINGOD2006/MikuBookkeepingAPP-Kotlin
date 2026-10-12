@@ -31,7 +31,20 @@ data class Record(
     val createdAtMillis: Long,
     val id: String,
     val deletedAtMillis: Long? = null,
+    val sourcePackage: String? = null,
+    val sourceChannel: String? = null,
+    val transactionId: String? = null,
+    val transactionTimeMillis: Long? = null,
+    /** 最近自動生成的備註；手動保存後清除，背景不可再覆寫。 */
+    val automaticNote: String? = null,
 ) {
+    val sourceLabel: String get() = when (sourcePackage) {
+        "com.macaupass.rechargeEasy" -> "MPay"
+        "com.eg.android.AlipayGphone", "hk.alipay.wallet", "com.alipay.android.app" -> "支付寶"
+        "com.tencent.mm" -> "微信"
+        null -> if (sourceChannel == "manual") "手動記帳" else "舊版記錄（來源未提供）"
+        else -> "其他應用"
+    }
     val isExpense: Boolean get() = amount < 0
 
     /** 不含正負號的金額。 */
@@ -65,6 +78,7 @@ data class Record(
         category = category,
         note = note,
         dateMillis = dateMillis,
+        automaticNote = null,
     )
 
     /** 是否已超過垃圾桶保留期。 */
@@ -82,6 +96,11 @@ data class Record(
         put("id", id)
         // 只有進垃圾桶的記錄才寫這個欄位，舊版／明細資料維持原本的 JSON 形狀
         deletedAtMillis?.let { put("deletedAt", it) }
+        sourcePackage?.let { put("sourcePackage", it) }
+        sourceChannel?.let { put("sourceChannel", it) }
+        transactionId?.let { put("transactionId", it) }
+        transactionTimeMillis?.let { put("transactionTime", it) }
+        automaticNote?.let { put("automaticNote", it) }
     }
 
     companion object {
@@ -109,6 +128,10 @@ data class Record(
             return try {
                 val category = json.optString("category")
                 if (category.isEmpty()) return null
+                val legacyId = json.optString("id")
+                val legacySource = legacyId.takeIf { it.startsWith("a11y_") }
+                    ?.removePrefix("a11y_")?.substringBefore('|')
+                val legacyBill = legacyId.substringAfter("|tx|", "").takeIf { it.isNotBlank() }
 
                 Record(
                     amount = json.optDouble("amount", 0.0),
@@ -121,6 +144,12 @@ data class Record(
                     },
                     // 舊資料沒有 deletedAt → 0 → 視為未刪除
                     deletedAtMillis = json.optLong("deletedAt", 0L).takeIf { it > 0L },
+                    sourcePackage = json.optString("sourcePackage").takeIf { it.isNotBlank() } ?: legacySource,
+                    sourceChannel = json.optString("sourceChannel").takeIf { it.isNotBlank() }
+                        ?: legacySource?.let { "accessibility" },
+                    transactionId = json.optString("transactionId").takeIf { it.isNotBlank() } ?: legacyBill,
+                    transactionTimeMillis = json.optLong("transactionTime", 0L).takeIf { it > 0L },
+                    automaticNote = json.optString("automaticNote").takeIf { it.isNotBlank() },
                 )
             } catch (e: Exception) {
                 null
@@ -135,6 +164,11 @@ data class Record(
             dateMillis: Long = System.currentTimeMillis(),
             createdAtMillis: Long = System.currentTimeMillis(),
             id: String = UUID.randomUUID().toString(),
+            sourcePackage: String? = null,
+            sourceChannel: String? = "manual",
+            transactionId: String? = null,
+            transactionTimeMillis: Long? = null,
+            automaticNote: String? = null,
         ): Record = Record(
             amount = amount,
             category = category,
@@ -142,6 +176,11 @@ data class Record(
             dateMillis = dateMillis,
             createdAtMillis = createdAtMillis,
             id = id,
+            sourcePackage = sourcePackage,
+            sourceChannel = sourceChannel,
+            transactionId = transactionId,
+            transactionTimeMillis = transactionTimeMillis,
+            automaticNote = automaticNote,
         )
 
         fun formatDate(date: LocalDate): String = date.format(DATE_FORMAT)

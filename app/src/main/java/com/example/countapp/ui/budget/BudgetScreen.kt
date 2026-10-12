@@ -21,11 +21,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.countapp.ui.bookkeeping.AmountInputDialog
 import com.example.countapp.AppContainer
 import com.example.countapp.domain.AmountFormatter
 import com.example.countapp.domain.BudgetAlertLevel
@@ -72,6 +74,7 @@ import java.time.YearMonth
 fun BudgetScreen(container: AppContainer) {
     val records by container.recordRepository.records.collectAsState()
     val categoryRevision by container.categoryStore.revision.collectAsState()
+    val budgetRevision by container.budgetRepository.revision.collectAsState()
 
     var selectedMonth by remember { mutableStateOf(YearMonth.now()) }
     var showMonthPicker by remember { mutableStateOf(false) }
@@ -91,11 +94,11 @@ fun BudgetScreen(container: AppContainer) {
     // 預算不是 StateFlow，改用一個版本號在使用者儲存後重算
     var version by remember { mutableStateOf(0) }
 
-    val budget = remember(selectedMonth, version) {
+    val budget = remember(selectedMonth, version, budgetRevision) {
         container.budgetRepository.load(selectedMonth)
     }
     // 各分類預算：只包含「有設定」的分類，缺值不會出現在這個 map
-    val categoryBudgets = remember(selectedMonth, version, categoryRevision) {
+    val categoryBudgets = remember(selectedMonth, version, categoryRevision, budgetRevision) {
         container.budgetRepository.loadCategoryBudgets(selectedMonth)
     }
     val monthRecords = remember(records, selectedMonth) {
@@ -135,6 +138,7 @@ fun BudgetScreen(container: AppContainer) {
 
     // 月份的使用狀態（警示等級／超支金額都在這裡算好）
     val monthStatus = calculateBudgetStatus(monthlyExpense, budget)
+    val locked = container.budgetRepository.isLocked(selectedMonth)
 
     Column(
         modifier = Modifier
@@ -181,35 +185,6 @@ fun BudgetScreen(container: AppContainer) {
                 .background(MikuColors.Surface, RoundedCornerShape(12.dp))
                 .padding(16.dp),
         ) {
-            if (editing) {
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    singleLine = true,
-                    label = { Text("每月預算金額", color = MikuColors.TextSecondary) },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = MikuColors.Text,
-                        unfocusedTextColor = MikuColors.Text,
-                    ),
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = {
-                        editing = false
-                        inputText = ""
-                    }) { Text("取消", color = MikuColors.TextSecondary) }
-
-                    TextButton(onClick = {
-                        val amount = AmountFormatter.round(inputText.toDoubleOrNull() ?: 0.0)
-                        if (amount > 0) {
-                            container.budgetRepository.save(selectedMonth, amount)
-                            version++
-                            editing = false
-                            inputText = ""
-                        }
-                    }) { Text("儲存", color = MikuColors.Primary) }
-                }
-            } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = budget?.let { "\$${AmountFormatter.format(it)}" } ?: "未設定",
@@ -218,7 +193,7 @@ fun BudgetScreen(container: AppContainer) {
                         fontWeight = FontWeight.Bold,
                     )
                     Spacer(modifier = Modifier.weight(1f))
-                    Row(
+                    if (!locked) Row(
                         // 「編輯」原本的可點高度只有文字行高（約 20dp），
                         // 用 48dp 高的外框撐開；內容仍垂直置中，不會與相鄰列重疊
                         // （卡片下方是 Spacer 與另一張不可點的卡片）。
@@ -239,8 +214,12 @@ fun BudgetScreen(container: AppContainer) {
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("編輯", color = MikuColors.Primary, fontSize = 13.sp)
                     }
+                    BudgetLockButton(locked, budget != null && selectedMonth >= YearMonth.now(), "整月預算") {
+                        if (locked) container.budgetRepository.unlock()
+                        else container.budgetRepository.lock(selectedMonth)
+                    }
                 }
-            }
+                if (locked) Text("已鎖定，每月沿用此金額；解鎖後可修改。", color = MikuColors.TextSecondary, fontSize = 12.sp)
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -374,30 +353,18 @@ fun BudgetScreen(container: AppContainer) {
                     iconKey = categoryDisplay[name]?.iconKey,
                     iconColorArgb = categoryDisplay[name]?.colorArgb,
                     status = status,
-                    editing = editingCategory == name,
-                    input = categoryInputText,
-                    onInputChange = { categoryInputText = it },
+                    locked = container.budgetRepository.isLocked(selectedMonth, name),
+                    canLock = status.isConfigured && selectedMonth >= YearMonth.now(),
+                    onToggleLock = {
+                        if (container.budgetRepository.isLocked(selectedMonth, name)) container.budgetRepository.unlock(name)
+                        else container.budgetRepository.lock(selectedMonth, name)
+                        editingCategory = null
+                    },
                     onStartEdit = {
                         categoryInputText = status.budget
                             ?.let { AmountFormatter.format(it) }
                             ?: ""
                         editingCategory = name
-                    },
-                    onCancelEdit = {
-                        editingCategory = null
-                        categoryInputText = ""
-                        // 還沒填金額就取消 → 這一列直接消失（不會留下一個空的分類）
-                        if (name !in categoryBudgets) draftCategories = draftCategories - name
-                    },
-                    onSave = {
-                        val amount = AmountFormatter.round(categoryInputText.toDoubleOrNull() ?: 0.0)
-                        if (amount > 0) {
-                            container.budgetRepository.saveCategoryBudget(selectedMonth, name, amount)
-                            version++
-                            draftCategories = draftCategories - name
-                        }
-                        editingCategory = null
-                        categoryInputText = ""
                     },
                     onClear = {
                         container.budgetRepository.clearCategoryBudget(selectedMonth, name)
@@ -451,6 +418,36 @@ fun BudgetScreen(container: AppContainer) {
         Spacer(modifier = Modifier.height(120.dp))
     }
 
+    if (editing) {
+        AmountInputDialog("整月預算", inputText,
+            onDismiss = { editing = false; inputText = "" },
+            onSave = { amount ->
+                if (!container.budgetRepository.isLocked(selectedMonth)) {
+                    container.budgetRepository.save(selectedMonth, amount)
+                    version++
+                }
+                editing = false
+                inputText = ""
+            })
+    }
+    editingCategory?.let { name ->
+        AmountInputDialog("$name 每月預算", categoryInputText,
+            onDismiss = {
+                editingCategory = null
+                categoryInputText = ""
+                if (name !in categoryBudgets) draftCategories = draftCategories - name
+            },
+            onSave = { amount ->
+                if (!container.budgetRepository.isLocked(selectedMonth, name)) {
+                    container.budgetRepository.saveCategoryBudget(selectedMonth, name, amount)
+                    version++
+                    draftCategories = draftCategories - name
+                }
+                editingCategory = null
+                categoryInputText = ""
+            })
+    }
+
     if (showMonthPicker) {
         MonthPickerDialog(
             initial = selectedMonth,
@@ -495,13 +492,11 @@ private fun CategoryBudgetRow(
     iconKey: String?,
     iconColorArgb: Long?,
     status: BudgetStatus,
-    editing: Boolean,
-    input: String,
-    onInputChange: (String) -> Unit,
     onStartEdit: () -> Unit,
-    onCancelEdit: () -> Unit,
-    onSave: () -> Unit,
     onClear: () -> Unit,
+    locked: Boolean,
+    canLock: Boolean,
+    onToggleLock: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -541,7 +536,7 @@ private fun CategoryBudgetRow(
             }
             Spacer(modifier = Modifier.width(8.dp))
             // 設定／編輯：整列 48dp 高都是可點範圍（文字行高本身只有約 20dp）
-            Box(
+            if (!locked) Box(
                 modifier = Modifier
                     .height(MinTouchTarget)
                     .clickableNoRipple(onStartEdit),
@@ -563,7 +558,7 @@ private fun CategoryBudgetRow(
                 }
             }
             // 只有已設定的分類才需要「清除」
-            if (status.isConfigured) {
+            if (status.isConfigured && !locked) {
                 Box(
                     modifier = Modifier
                         .height(MinTouchTarget)
@@ -578,34 +573,11 @@ private fun CategoryBudgetRow(
                     )
                 }
             }
+            BudgetLockButton(locked, canLock, name, onToggleLock)
         }
+        if (locked) Text("已鎖定，每月沿用", color = MikuColors.TextSecondary, fontSize = 12.sp)
 
-        if (editing) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInputChange,
-                singleLine = true,
-                label = { Text("$name 每月預算", color = MikuColors.TextSecondary) },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = MikuColors.Text,
-                    unfocusedTextColor = MikuColors.Text,
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-            )
-            Row(
-                horizontalArrangement = Arrangement.End,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                TextButton(onClick = onCancelEdit) {
-                    Text("取消", color = MikuColors.TextSecondary)
-                }
-                TextButton(onClick = onSave) {
-                    Text("儲存", color = MikuColors.Primary)
-                }
-            }
-        } else if (status.isConfigured) {
+        if (status.isConfigured) {
             // 「已花費 / 預算」放在進度條正上方（百分比已經在最上面的名稱列）
             status.budget?.let { budget ->
                 Row(
@@ -645,6 +617,15 @@ private fun CategoryBudgetRow(
                 trackColor = MikuColors.SurfaceVariant,
             )
         }
+    }
+}
+
+@Composable
+private fun BudgetLockButton(locked: Boolean, enabled: Boolean, label: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        Icon(if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+            contentDescription = (if (locked) "解鎖" else "鎖定") + label,
+            tint = if (enabled) MikuColors.Primary else MikuColors.TextSecondary)
     }
 }
 

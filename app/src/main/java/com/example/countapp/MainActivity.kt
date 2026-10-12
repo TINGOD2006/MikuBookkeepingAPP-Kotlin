@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
             MikuApp(container)
         }
 
-        // 從「已自動記錄，點一下選分類」通知進來時，直接跳編輯頁
+        // 從「已自動記錄，點一下查看詳情」通知進來時，直接跳編輯頁
         handleAutoRecordPromptIntent(intent)
     }
 
@@ -41,10 +41,10 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 通知帶來的記錄 id → 請 UI 直接開啟「選分類／寫備註」編輯頁。
+     * 通知帶來的記錄 id → 請 UI 直接開啟「記錄詳情」編輯頁。
      *
-     * 這裡傳 `openEditor = true`：使用者是**主動點了通知**才進來的，
-     * 直接開編輯頁（App 內自動記錄只用圓球提示，不打斷操作）。
+     * 這裡傳 `openDetails = true`：使用者是**主動點了通知**才進來的，
+     * 直接開詳情頁（App 內自動記錄只用圓球提示，不打斷操作）。
      *
      * 記錄可能已被使用者刪除（找不到 id），這種情況什麼都不做。
      */
@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
         val container = (application as MikuApplication).container
         container.recordRepository.snapshot()
             .firstOrNull { it.id == recordId }
-            ?.let { container.requestAutoRecordPrompt(it, openEditor = true) }
+            ?.let { container.requestAutoRecordPrompt(it, openDetails = true) }
     }
 
     /**

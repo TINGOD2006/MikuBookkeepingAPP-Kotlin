@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -56,6 +57,7 @@ import com.example.countapp.data.Record
 import com.example.countapp.ui.analysis.AnalysisScreen
 import com.example.countapp.ui.bookkeeping.BookkeepingScreen
 import com.example.countapp.ui.bookkeeping.RecordEditorScreen
+import com.example.countapp.ui.bookkeeping.RecordDetailDialog
 import com.example.countapp.ui.bookkeeping.SearchScreen
 import com.example.countapp.ui.budget.BudgetScreen
 import com.example.countapp.ui.profile.ProfileScreen
@@ -94,6 +96,8 @@ fun MikuApp(container: AppContainer) {
         // 編輯中的記錄。刻意放在最上層（與新增畫面同級），
         // 這樣編輯畫面才能蓋住底部導覽與中央 FAB，不會被誤觸而丟掉未儲存的修改。
         var editingRecord by remember { mutableStateOf<Record?>(null) }
+        var viewingId by remember { mutableStateOf<String?>(null) }
+        val records by container.recordRepository.records.collectAsState()
         // 明細頁正在看的月份。放在最上層（而不是明細頁內部）：切到別頁再回來、
         // 或轉螢幕時，使用者選的月份都不會被重置。
         var selectedMonthCode by rememberSaveable {
@@ -118,24 +122,27 @@ fun MikuApp(container: AppContainer) {
         // 使用者切換開關的當下就收起已經顯示的圓球。
         val floatingBallEnabled by container.settingsStore.floatingBallEnabledFlow.collectAsState()
 
-        // 圓球浮出後，使用者「按了圓球」才會打開編輯頁；沒按就只是安靜地待著，
+        // 圓球浮出後，使用者「按了圓球」才會打開分類與備註頁；沒按就只是安靜地待著，
         // 記錄本身已經寫入，不會因為使用者不理它而遺失。
-        var showAutoRecordEditor by remember { mutableStateOf(false) }
+        var autoRecordEditingId by rememberSaveable { mutableStateOf<String?>(null) }
         val autoRecordOpenRequested by container.autoRecordPromptOpenRequest.collectAsState()
 
         // 通知被點擊（MainActivity 帶著記錄 id 進來）＝使用者已明確要看那一筆，
-        // 這時直接開編輯頁，不必讓他再點一次圓球。
-        LaunchedEffect(autoRecordOpenRequested, pendingAutoRecords) {
-            if (autoRecordOpenRequested && pendingAutoRecords.isNotEmpty()) {
-                showAutoRecordEditor = true
+        // 這時直接開分類與備註頁，不必讓他再點一次圓球。
+        LaunchedEffect(autoRecordOpenRequested, pendingAutoRecords, editingRecord, showAddRecord, autoRecordEditingId) {
+            // 另一筆通知不得換掉尚未保存的草稿；關閉目前編輯頁後再消費請求。
+            if (autoRecordOpenRequested && pendingAutoRecords.isNotEmpty() && editingRecord == null &&
+                !showAddRecord && autoRecordEditingId == null) {
+                viewingId = null
+                autoRecordEditingId = pendingAutoRecords.first().id
                 container.consumeAutoRecordPromptOpenRequest()
             }
         }
 
         // 佇列清空（最後一筆處理完）時把「編輯中」歸零：
         // 下一次自動記錄才會重新浮出圓球，而不是沿用上一輪的狀態。
-        LaunchedEffect(pendingAutoRecords.isEmpty()) {
-            if (pendingAutoRecords.isEmpty()) showAutoRecordEditor = false
+        LaunchedEffect(pendingAutoRecords, autoRecordEditingId) {
+            if (pendingAutoRecords.none { it.id == autoRecordEditingId }) autoRecordEditingId = null
         }
 
         // 資料移轉完成時提示一次
@@ -181,6 +188,7 @@ fun MikuApp(container: AppContainer) {
                                     showAddRecord = false
                                     editingRecord = it
                                 },
+                                onViewRecord = { viewingId = it.id },
                                 onOpenSearch = { showSearch = true },
                             )
                             1 -> BudgetScreen(container)
@@ -191,12 +199,12 @@ fun MikuApp(container: AppContainer) {
                 }
 
                 // 自動記錄（MPay 等）完成後的圓球：浮在整個 App 的最上層，
-                // 點一下＝開啟這筆記錄的編輯頁；不理它記錄也已經存好了。
-                // 使用者正在編輯那筆時（showAutoRecordEditor）先收起來，避免重複入口。
-                if (floatingBallEnabled && !showAutoRecordEditor && pendingAutoRecords.isNotEmpty()) {
+                // 點一下＝開啟這筆記錄的分類與備註頁；不理它記錄也已經存好了。
+                // 使用者正在編輯那筆時（autoRecordEditingId）先收起來，避免重複入口。
+                if (floatingBallEnabled && autoRecordEditingId == null && !showAddRecord && editingRecord == null && pendingAutoRecords.isNotEmpty()) {
                     AutoRecordBall(
                         pendingCount = pendingAutoRecords.size,
-                        onClick = { showAutoRecordEditor = true },
+                        onClick = { viewingId = null; autoRecordEditingId = pendingAutoRecords.first().id },
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
                             .navigationBarsPadding()
@@ -216,25 +224,25 @@ fun MikuApp(container: AppContainer) {
                     // 編輯畫面會疊在尋找頁之上，存檔後回到搜尋結果
                     editingRecord = it
                 },
+                onViewRecord = { viewingId = it.id },
             )
         }
 
-        // 自動記錄後的編輯頁（最上層）：使用者點了圓球（或點了通知）才會出現。
+        // 自動記錄後的分類與備註頁（最上層）：使用者點了圓球（或點了通知）才會出現。
         // 直接關閉＝保留自動分類，因此不需要額外的「略過」按鈕。
         // 一次處理一筆，關閉後自動換佇列中的下一筆（圓球會帶著新的筆數重新浮出）。
         // 一次只建立一個編輯視窗；返回後保留原本的搜尋或頁籤位置。
-        val autoRecord = pendingAutoRecords.firstOrNull().takeIf { showAutoRecordEditor }
+        val autoRecord = records.firstOrNull { it.id == autoRecordEditingId }
         when {
             autoRecord != null -> {
                 val record = autoRecord
-                val remaining = pendingAutoRecords.size - 1
                 RecordEditorScreen(
                     container = container,
                     editing = record,
-                    title = if (remaining > 0) "已自動記錄（還有 $remaining 筆）" else "已自動記錄",
-                    hint = "請確認分類與備註；直接關閉即保留自動分類（${record.note}）",
+                    title = "分類與備註",
+                    hint = "帳目已記錄，可選擇分類及修改備註；關閉會保留帳目。",
                     onDismiss = {
-                        showAutoRecordEditor = false
+                        autoRecordEditingId = null
                         container.clearAutoRecordPrompt(record.id)
                     },
                 )
@@ -248,6 +256,9 @@ fun MikuApp(container: AppContainer) {
                 container = container,
                 onDismiss = { showAddRecord = false },
             )
+            viewingId != null -> records.firstOrNull { it.id == viewingId }?.let {
+                RecordDetailDialog(it, onDismiss = { viewingId = null })
+            }
         }
     }
 }
@@ -258,28 +269,26 @@ private val BottomBarHeight: Dp = 72.dp
 /** 自動記錄圓球的直徑；中央新增按鈕獨立放在底部欄內。 */
 private val AutoRecordBallSize: Dp = 60.dp
 
-/** 五個按鈕在同一列，中心距由內側 16% 寬向外增至 24% 寬。 */
+/** 五個等寬欄位，中央新增按鈕也佔完整的一欄。 */
 @Composable
 private fun MikuBottomBar(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     onAddRecord: () -> Unit,
 ) {
-    BoxWithConstraints(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(MikuColors.Background)
             .navigationBarsPadding()
             .height(BottomBarHeight),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        val itemWidth = maxWidth * 0.16f
-        fun itemAt(center: Float) = Modifier.align(Alignment.CenterStart)
-            .offset(x = maxWidth * center - itemWidth / 2).width(itemWidth)
-        BottomBarItem(Icons.Filled.Home, "明細", selectedIndex == 0, itemAt(0.10f)) { onSelect(0) }
-        BottomBarItem(Icons.AutoMirrored.Filled.MenuBook, "預算", selectedIndex == 1, itemAt(0.34f)) { onSelect(1) }
-        MikuFab(onClick = onAddRecord, modifier = Modifier.align(Alignment.Center))
-        BottomBarItem(Icons.Filled.Analytics, "分析", selectedIndex == 2, itemAt(0.66f)) { onSelect(2) }
-        BottomBarItem(Icons.Filled.Person, "我的", selectedIndex == 3, itemAt(0.90f)) { onSelect(3) }
+        BottomBarItem(Icons.Filled.Home, "明細", selectedIndex == 0, Modifier.weight(1f)) { onSelect(0) }
+        BottomBarItem(Icons.AutoMirrored.Filled.MenuBook, "預算", selectedIndex == 1, Modifier.weight(1f)) { onSelect(1) }
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { MikuFab(onClick = onAddRecord) }
+        BottomBarItem(Icons.Filled.Analytics, "分析", selectedIndex == 2, Modifier.weight(1f)) { onSelect(2) }
+        BottomBarItem(Icons.Filled.Person, "我的", selectedIndex == 3, Modifier.weight(1f)) { onSelect(3) }
     }
 }
 
@@ -338,7 +347,7 @@ private fun MikuFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
  * 為什麼不是直接彈出確認頁：自動記帳是在使用者「正在用別的 App 付款」的當下發生，
  * 把整頁畫面蓋上來會打斷他手上的操作。圓球只在右下角靜靜地呼吸，使用者想補分類
  * 或備註時再點它：
- *   - 點一下 → 開啟這筆記錄的編輯頁（可改分類／備註／金額／日期）
+ *   - 點一下 → 開啟這筆記錄的分類與備註頁（可查看分類／備註／時間／來源及單號）
  *   - 不理它 → 記錄已經寫入，不會遺失，圓球會在下次進入 App 時繼續等著
  *
  * 同時有多筆待處理時，右上角顯示筆數徽章（一次只開一筆，關掉後換下一筆）。
@@ -374,9 +383,9 @@ private fun AutoRecordBall(
             Icon(
                 imageVector = Icons.Filled.EditNote,
                 contentDescription = if (pendingCount > 1) {
-                    "已自動記錄 $pendingCount 筆，點一下編輯"
+                    "已自動記錄 $pendingCount 筆，點一下查看"
                 } else {
-                    "已自動記錄，點一下編輯這筆記錄"
+                    "已自動記錄，點一下查看這筆記錄"
                 },
                 tint = MikuColors.Text,
                 modifier = Modifier.size(28.dp),

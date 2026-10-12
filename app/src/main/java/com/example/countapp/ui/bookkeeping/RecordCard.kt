@@ -128,11 +128,13 @@ fun RecordCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            Text(record.sourceLabel, color = MikuColors.OnCardSecondary, fontSize = 10.sp,
+                lineHeight = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // 右側只留金額：編輯筆與按鈕已移除（點卡片或左滑的【編輯】方塊都能編輯）
+        // 點卡片查看詳情，編輯只由左滑的動作方塊進入。
         Text(
             text = (if (record.isExpense) "-" else "") + AmountFormatter.format(record.absoluteAmount),
             color = if (record.isExpense) MikuColors.Expense else MikuColors.Income,

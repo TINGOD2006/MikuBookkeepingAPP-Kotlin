@@ -36,10 +36,9 @@ android {
         minSdk = 26
         targetSdk = 36
         // 2.0.1 起改用固定簽章的 release keystore（見下方 signingConfigs）。
-        // versionCode 必須比已發布的 2.0.0（versionCode 2）大，安裝在手機上的
-        // 舊版才能被直接覆蓋升級。
-        versionCode = 4
-        versionName = "2.0.2"
+        // versionCode 每次發布必須嚴格遞增，並沿用同一簽章供舊版覆蓋升級。
+        versionCode = 5
+        versionName = "2.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

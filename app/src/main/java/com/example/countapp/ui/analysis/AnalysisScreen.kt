@@ -19,12 +19,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +43,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.countapp.AppContainer
+import com.example.countapp.domain.recordsForAnalysis
+import com.example.countapp.ui.MonthPickerDialog
+import java.time.YearMonth
 import com.example.countapp.domain.AmountFormatter
 import com.example.countapp.domain.CategoryCatalog
 import com.example.countapp.domain.CategoryItem
@@ -74,13 +79,17 @@ fun AnalysisScreen(container: AppContainer) {
     val categoryRevision by container.categoryStore.revision.collectAsState()
     var selectedType by remember { mutableStateOf(CategoryCatalog.TYPE_EXPENSE) }
 
-    val filtered = remember(records, selectedType) {
-        if (selectedType == CategoryCatalog.TYPE_EXPENSE) {
-            records.filter { it.amount < 0 }
-        } else {
-            records.filter { it.amount > 0 }
-        }
+    var monthCode by rememberSaveable { mutableStateOf(YearMonth.now().let { it.year * 100 + it.monthValue }) }
+    val selectedMonth = monthCode.takeIf { it != 0 }?.let { YearMonth.of(it / 100, it % 100) }
+    var showMonthPicker by remember { mutableStateOf(false) }
+    val filtered = remember(records, selectedType, selectedMonth) {
+        recordsForAnalysis(records, selectedType, selectedMonth)
     }
+    if (showMonthPicker) MonthPickerDialog(
+        initial = selectedMonth ?: YearMonth.now(),
+        onDismiss = { showMonthPicker = false },
+        onConfirm = { monthCode = it.year * 100 + it.monthValue; showMonthPicker = false },
+    )
 
     // 包括已刪分類，依目前收支方向快取圖示；分類變更時一起刷新。
     val categoryLookup = remember(selectedType, categoryRevision) {
@@ -103,6 +112,15 @@ fun AnalysisScreen(container: AppContainer) {
             modifier = Modifier.statusBarsPadding().padding(16.dp),
         )
 
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { showMonthPicker = true }) {
+                Text(selectedMonth?.let { "${it.year}年${it.monthValue}月 ▾" } ?: "選擇月份 ▾", color = MikuColors.Primary)
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { monthCode = 0 }) {
+                Text("全部月份", color = if (selectedMonth == null) MikuColors.Primary else MikuColors.TextSecondary)
+            }
+        }
         // ===== 支出 / 收入 =====
         Row(
             modifier = Modifier

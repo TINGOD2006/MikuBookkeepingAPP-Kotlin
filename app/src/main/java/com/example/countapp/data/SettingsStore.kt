@@ -2,6 +2,7 @@ package com.example.countapp.data
 
 import android.content.SharedPreferences
 import com.example.countapp.domain.ClassificationRules
+import com.example.countapp.domain.AutoRecordMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,7 +21,14 @@ class SettingsStore(
 
     // ========== 自動記帳 ==========
 
-    private val _autoRecordEnabled = MutableStateFlow(prefs.getBoolean(KEY_AUTO_RECORD, false))
+    private fun readAutoRecordMode(): AutoRecordMode {
+        if (!prefs.getBoolean(KEY_AUTO_RECORD, false)) return AutoRecordMode.MANUAL
+        return AutoRecordMode.entries.find { it.name == prefs.getString(KEY_AUTO_RECORD_MODE, null) }
+            ?.takeUnless { it == AutoRecordMode.MANUAL } ?: AutoRecordMode.NOTIFICATION
+    }
+    private val _autoRecordMode = MutableStateFlow(readAutoRecordMode())
+    val autoRecordModeFlow: StateFlow<AutoRecordMode> = _autoRecordMode.asStateFlow()
+    private val _autoRecordEnabled = MutableStateFlow(_autoRecordMode.value != AutoRecordMode.MANUAL)
     val autoRecordEnabledFlow: StateFlow<Boolean> = _autoRecordEnabled.asStateFlow()
     private val _useAiClassification = MutableStateFlow(prefs.getBoolean(KEY_USE_AI, true))
     val useAiClassificationFlow: StateFlow<Boolean> = _useAiClassification.asStateFlow()
@@ -37,8 +45,24 @@ class SettingsStore(
 
     /** 自動記錄開關。預設關閉（與 Flutter 版一致，需使用者主動開啟）。 */
     var autoRecordEnabled: Boolean
-        get() = _autoRecordEnabled.value
-        set(value) = setBoolean(KEY_AUTO_RECORD, value, _autoRecordEnabled)
+        get() = autoRecordMode != AutoRecordMode.MANUAL
+        set(value) {
+            autoRecordMode = if (!value) AutoRecordMode.MANUAL else if (autoRecordEnabled) autoRecordMode
+                else AutoRecordMode.entries.find { it.name == prefs.getString(KEY_LAST_AUTO_RECORD_MODE, null) }
+                    ?.takeUnless { it == AutoRecordMode.MANUAL } ?: AutoRecordMode.NOTIFICATION
+        }
+
+    /** 單一層級控制所有來源；舊版只有主開關的設定遷移至通知層。 */
+    var autoRecordMode: AutoRecordMode
+        get() = _autoRecordMode.value
+        set(value) {
+            val enabled = value != AutoRecordMode.MANUAL
+            val editor = prefs.edit().putString(KEY_AUTO_RECORD_MODE, value.name).putBoolean(KEY_AUTO_RECORD, enabled)
+            if (enabled) editor.putString(KEY_LAST_AUTO_RECORD_MODE, value.name)
+            editor.apply()
+            _autoRecordMode.value = value
+            _autoRecordEnabled.value = enabled
+        }
 
     /** 是否使用 AI 分類（關閉時走內建規則表，不消耗 AI 額度）。 */
     var useAiClassification: Boolean
@@ -222,6 +246,8 @@ class SettingsStore(
 
     companion object {
         const val KEY_AUTO_RECORD: String = "auto_record_enabled"
+        const val KEY_AUTO_RECORD_MODE: String = "auto_record_mode"
+        private const val KEY_LAST_AUTO_RECORD_MODE: String = "last_auto_record_mode"
         const val KEY_USE_AI: String = "use_ai_classification"
         const val KEY_BACKGROUND_NOTIFICATION: String = "background_notification_enabled"
         const val KEY_BUDGET_NOTIFICATION: String = "budget_notification_enabled"

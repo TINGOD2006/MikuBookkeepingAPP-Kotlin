@@ -4,6 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PaymentScreenAnalyzerTest {
+    @Test fun `其他支付應用的歷史收付款詳情聊天及帳单頁也不新增`() {
+        for (pkg in listOf("com.tencent.mm", "com.eg.android.AlipayGphone", "sample.payment")) {
+            for (title in listOf("收款詳情", "付款詳情", "帳單", "交易记录")) {
+                assertNull(PaymentScreenAnalyzer.decide(pkg, "$title\n收款成功\n￥50\n交易單號\n20261005000001"))
+            }
+        }
+        assertNull(PaymentScreenAnalyzer.decide("com.tencent.mm", "支付成功\n￥50\n交易單號\n20261005000001", "com.tencent.mm.ui.chatting.ChattingUI"))
+    }
     private val wechat = "com.tencent.mm"
     private val alipay = "com.eg.android.AlipayGphone"
 
@@ -68,7 +76,9 @@ class PaymentScreenAnalyzerTest {
     }
 
     @Test fun `MPay付款詳情取交易金額而非餘額且保留單號`() {
-        val result = PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", "交易詳情\n交易成功\n測試商戶\nMOP\n74.26\n付款方式\n錢包餘額\n付款時間\n2026-10-04 04:30\n交易編號\n2026100400000001")!!
+        val text = "交易詳情\n交易成功\n測試商戶\nMOP\n74.26\n付款方式\n錢包餘額\n付款時間\n2026-10-04 04:30\n交易編號\n2026100400000001"
+        assertNull(PaymentScreenAnalyzer.decide("com.macaupass.rechargeEasy", text))
+        val result = MpayScreenAnalyzer.receipt(text)!!
         assertEquals(74.26, result.amount, 0.001)
         assertFalse(result.isIncome)
         assertEquals("2026100400000001", result.transactionId)
